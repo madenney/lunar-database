@@ -1,0 +1,56 @@
+{
+  "name": "lm-database",
+  "version": "0.1.0",
+  "description": "Self-hosted Slippi replay archive system for lunarmelee.com",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
+    "db:start": "sudo systemctl start mongod && echo 'MongoDB started'",
+    "db:stop": "sudo systemctl stop mongod && echo 'MongoDB stopped'",
+    "db:status": "systemctl is-active mongod && mongosh --quiet --eval 'db.stats().collections + \" collections, \" + db.stats().objects + \" documents\"' lm-database",
+    "crawl": "ts-node src/scripts/crawl.ts",
+    "test": "jest --forceExit --detectOpenHandles"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/madenney/lm-database.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/madenney/lm-database/issues"
+  },
+  "homepage": "https://github.com/madenney/lm-database#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.991.0",
+    "@aws-sdk/s3-request-presigner": "^3.991.0",
+    "@slippi/slippi-js": "^9.0.0",
+    "archiver": "^7.0.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "mongoose": "^9.1.6",
+    "multer": "^2.0.2",
+    "unzipper": "^0.12.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/archiver": "^7.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^25.2.2",
+    "@types/unzipper": "^0.10.11",
+    "@types/uuid": "^10.0.0",
+    "jest": "^30.2.0",
+    "nodemon": "^3.1.11",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
