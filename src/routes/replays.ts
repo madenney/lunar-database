@@ -1,105 +1,82 @@
 import { Router, Request, Response } from "express";
 import path from "path";
 import { Replay } from "../models/Replay";
+import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
+import { config } from "../config";
 
 const router = Router();
+
+// POST /api/replays/estimate — estimate count, size, and ETA for a filter
+router.post("/estimate", async (req: Request, res: Response) => {
+  try {
+    const params: ReplaySearchParams = req.body;
+
+    // Require at least one filter
+    const hasFilter = !!(
+      params.p1CharacterId || params.p1ConnectCode || params.p1DisplayName ||
+      params.p2CharacterId || params.p2ConnectCode || params.p2DisplayName ||
+      params.stageId || params.startDate || params.endDate
+    );
+    if (!hasFilter) {
+      res.status(400).json({ error: "At least one filter is required" });
+      return;
+    }
+
+    const query = buildReplaySearchQuery(params);
+
+    const [count, sizeAgg] = await Promise.all([
+      Replay.countDocuments(query),
+      Replay.aggregate([
+        { $match: query },
+        { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
+      ]),
+    ]);
+
+    const rawSize = sizeAgg[0]?.totalSize ?? 0;
+    const estimatedCompressedSize = Math.round(rawSize / 8);
+
+    // ETA: compression time + upload time
+    const COMPRESS_RATE = 120; // files per second
+    const uploadSpeedBytes = (config.estimateUploadSpeedMbps * 1024 * 1024) / 8; // Mbps → bytes/sec
+    const compressTimeSec = count / COMPRESS_RATE;
+    const uploadTimeSec = estimatedCompressedSize / uploadSpeedBytes;
+    const estimatedTimeSec = Math.round(compressTimeSec + uploadTimeSec);
+
+    res.json({
+      replayCount: count,
+      rawSize,
+      estimatedCompressedSize,
+      estimatedTimeSec,
+      exceedsLimit: count > config.jobMaxReplays,
+      limit: config.jobMaxReplays,
+    });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 // GET /api/replays — search/filter replays
 router.get("/", async (req: Request, res: Response) => {
   try {
     const {
-      stageId,
-      startDate,
-      endDate,
       sort,
-      p1CharacterId, p1ConnectCode, p1DisplayName,
-      p2CharacterId, p2ConnectCode, p2DisplayName,
       page = "1",
       limit = "50",
     } = req.query;
 
-    // Exclude junk replays: must have a known stage or at least one known character
-    const notJunk = {
-      $or: [
-        { stageId: { $ne: null } },
-        { "players.characterId": { $ne: null } },
-      ],
-      "players.0": { $exists: true },
+    const params: ReplaySearchParams = {
+      p1CharacterId: req.query.p1CharacterId as string | undefined,
+      p1ConnectCode: req.query.p1ConnectCode as string | undefined,
+      p1DisplayName: req.query.p1DisplayName as string | undefined,
+      p2CharacterId: req.query.p2CharacterId as string | undefined,
+      p2ConnectCode: req.query.p2ConnectCode as string | undefined,
+      p2DisplayName: req.query.p2DisplayName as string | undefined,
+      stageId: req.query.stageId as string | undefined,
+      startDate: req.query.startDate as string | undefined,
+      endDate: req.query.endDate as string | undefined,
     };
 
-    const query: any = {};
-
-    // Build per-player $elemMatch conditions
-    // All filter params accept comma-separated values for multi-select
-    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const splitParam = (v: string | undefined) => v ? (v as string).split(",").filter(Boolean) : [];
-
-    const p1CharIds = splitParam(p1CharacterId as string | undefined);
-    const p1Codes = splitParam(p1ConnectCode as string | undefined);
-    const p1Names = splitParam(p1DisplayName as string | undefined);
-    const p2CharIds = splitParam(p2CharacterId as string | undefined);
-    const p2Codes = splitParam(p2ConnectCode as string | undefined);
-    const p2Names = splitParam(p2DisplayName as string | undefined);
-
-    const p1Match: any = {};
-    if (p1CharIds.length === 1) p1Match.characterId = Number(p1CharIds[0]);
-    else if (p1CharIds.length > 1) p1Match.characterId = { $in: p1CharIds.map(Number) };
-    if (p1Codes.length === 1) p1Match.connectCode = p1Codes[0];
-    else if (p1Codes.length > 1) p1Match.connectCode = { $in: p1Codes };
-    if (p1Names.length === 1) {
-      p1Match.displayName = { $regex: `^${escapeRegex(p1Names[0])}`, $options: "i" };
-    } else if (p1Names.length > 1) {
-      p1Match.displayName = { $regex: `^(${p1Names.map(escapeRegex).join("|")})`, $options: "i" };
-    }
-
-    const p2Match: any = {};
-    if (p2CharIds.length === 1) p2Match.characterId = Number(p2CharIds[0]);
-    else if (p2CharIds.length > 1) p2Match.characterId = { $in: p2CharIds.map(Number) };
-    if (p2Codes.length === 1) p2Match.connectCode = p2Codes[0];
-    else if (p2Codes.length > 1) p2Match.connectCode = { $in: p2Codes };
-    if (p2Names.length === 1) {
-      p2Match.displayName = { $regex: `^${escapeRegex(p2Names[0])}`, $options: "i" };
-    } else if (p2Names.length > 1) {
-      p2Match.displayName = { $regex: `^(${p2Names.map(escapeRegex).join("|")})`, $options: "i" };
-    }
-
-    // Prefix a match object's keys with an array position, e.g. { characterId: 20 } → { "players.0.characterId": 20 }
-    const prefixMatch = (match: any, prefix: string): any => {
-      const result: any = {};
-      for (const [key, value] of Object.entries(match)) {
-        result[`${prefix}.${key}`] = value;
-      }
-      return result;
-    };
-
-    const hasP1 = Object.keys(p1Match).length > 0;
-    const hasP2 = Object.keys(p2Match).length > 0;
-    if (hasP1 && hasP2) {
-      // Use positional queries with $or so p1 and p2 must match DIFFERENT players
-      query.$or = [
-        { ...prefixMatch(p1Match, "players.0"), ...prefixMatch(p2Match, "players.1") },
-        { ...prefixMatch(p1Match, "players.1"), ...prefixMatch(p2Match, "players.0") },
-      ];
-    } else if (hasP1) {
-      query.players = { $elemMatch: p1Match };
-    } else if (hasP2) {
-      query.players = { $elemMatch: p2Match };
-    }
-
-    // Combine junk filter with query using $and so it doesn't clash with player $or
-    const finalQuery = { $and: [notJunk, query] };
-
-    const stageIds = splitParam(stageId as string | undefined);
-    if (stageIds.length === 1) {
-      query.stageId = Number(stageIds[0]);
-    } else if (stageIds.length > 1) {
-      query.stageId = { $in: stageIds.map(Number) };
-    }
-    if (startDate || endDate) {
-      query.startAt = {};
-      if (startDate) query.startAt.$gte = new Date(startDate as string);
-      if (endDate) query.startAt.$lte = new Date(endDate as string);
-    }
+    const finalQuery = buildReplaySearchQuery(params);
 
     // Parse sort param (format: "field:direction", e.g. "startAt:-1")
     const SORT_ALLOWLIST = ["startAt", "indexedAt", "duration"];
@@ -113,7 +90,6 @@ router.get("/", async (req: Request, res: Response) => {
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.max(1, parseInt(limit as string, 10));
-    console.log("LIMIT DEBUG:", limit, "→", limitNum);
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([

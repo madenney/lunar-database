@@ -138,19 +138,82 @@ Download the raw `.slp` file for a single replay.
 
 ---
 
+## Estimates
+
+### Estimate Replay Download (Full Filters)
+
+```
+POST /api/replays/estimate
+```
+
+Estimate replay count, compressed download size, and processing ETA using the full replay search filter syntax. Supports the same p1/p2 positional matching as [Search Replays](#search-replays). Use this for instant download size previews in the UI.
+
+**Request Body**
+
+```json
+{
+  "p1ConnectCode": "AKLO#0",
+  "p1CharacterId": "20",
+  "p2CharacterId": "2",
+  "stageId": "31",
+  "startDate": "2024-01-01",
+  "endDate": "2024-12-31"
+}
+```
+
+All fields are optional, but **at least one filter is required**. Values are comma-separated strings (same format as the search query params).
+
+| Field | Type | Description |
+|---|---|---|
+| `p1ConnectCode` | string | Player 1 connect code(s), comma-separated. |
+| `p1CharacterId` | string | Player 1 character ID(s), comma-separated. |
+| `p1DisplayName` | string | Player 1 display name(s), comma-separated (prefix match). |
+| `p2ConnectCode` | string | Player 2 connect code(s), comma-separated. |
+| `p2CharacterId` | string | Player 2 character ID(s), comma-separated. |
+| `p2DisplayName` | string | Player 2 display name(s), comma-separated (prefix match). |
+| `stageId` | string | Stage ID(s), comma-separated. |
+| `startDate` | string | ISO 8601 date. Games on or after. |
+| `endDate` | string | ISO 8601 date. Games on or before. |
+
+**Response** `200`
+
+```json
+{
+  "replayCount": 342,
+  "rawSize": 83886080,
+  "estimatedCompressedSize": 10485760,
+  "estimatedTimeSec": 45,
+  "exceedsLimit": false,
+  "limit": 5000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `replayCount` | number | Number of matching replays. |
+| `rawSize` | number | Total raw file size in bytes. |
+| `estimatedCompressedSize` | number | Estimated compressed size in bytes (conservative 8x estimate). |
+| `estimatedTimeSec` | number | Estimated processing time in seconds (compression + upload). |
+| `exceedsLimit` | boolean | Whether the count exceeds the per-job maximum. |
+| `limit` | number | Maximum replays allowed per job. |
+
+**Response** `400` — No filter provided.
+
+---
+
 ## Download Jobs
 
 Request bulk downloads of replays matching a filter. Replays are compressed with [slpz](https://github.com/Walnut356/slpz) (~8-12x smaller than raw .slp) and packaged into a `.tar` archive. The archive is uploaded to CDN storage and a download link is returned.
 
 Download links expire after 48 hours.
 
-### Estimate Download
+### Estimate Download (Simple Filters)
 
 ```
 POST /api/jobs/estimate
 ```
 
-Preview how many replays match a filter and the estimated download size before creating a job. Use this to show the user what they're about to download.
+Preview how many replays match a filter and the estimated download size before creating a job. Uses simple filter syntax (single values only). For full p1/p2 positional matching, use [POST /api/replays/estimate](#estimate-replay-download-full-filters) instead.
 
 **Request Body**
 

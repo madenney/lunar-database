@@ -20,4 +20,7 @@ export const config = {
   jobMaxReplays: parseInt(process.env.JOB_MAX_REPLAYS || "5000", 10),
   jobBundleExpiryHours: parseInt(process.env.JOB_BUNDLE_EXPIRY_HOURS || "48", 10),
   jobTempDir: process.env.JOB_TEMP_DIR || "/tmp/lm-job-temp",
+
+  // Estimate settings
+  estimateUploadSpeedMbps: parseInt(process.env.ESTIMATE_UPLOAD_SPEED_MBPS || "10", 10),
 };

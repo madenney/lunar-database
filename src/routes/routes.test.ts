@@ -54,6 +54,68 @@ async function post(path: string, body: any): Promise<{ status: number; body: an
   return { status: res.status, body: await res.json() };
 }
 
+describe("POST /api/replays/estimate", () => {
+  it("returns count, sizes, and ETA for a filter", async () => {
+    await Replay.create({
+      filePath: "/test/re1.slp", fileHash: "re1", fileSize: 80000,
+      players: [
+        { playerIndex: 0, connectCode: "EST#1", characterId: 2, characterName: "Fox" },
+        { playerIndex: 1, connectCode: "EST#2", characterId: 9, characterName: "Marth" },
+      ],
+    });
+    await Replay.create({
+      filePath: "/test/re2.slp", fileHash: "re2", fileSize: 120000,
+      players: [
+        { playerIndex: 0, connectCode: "EST#1", characterId: 2, characterName: "Fox" },
+        { playerIndex: 1, connectCode: "EST#3", characterId: 20, characterName: "Falco" },
+      ],
+    });
+
+    const { status, body } = await post("/api/replays/estimate", {
+      p1ConnectCode: "EST#1",
+    });
+
+    expect(status).toBe(200);
+    expect(body.replayCount).toBe(2);
+    expect(body.rawSize).toBe(200000);
+    expect(body.estimatedCompressedSize).toBe(25000);
+    expect(body.estimatedTimeSec).toBeGreaterThanOrEqual(0);
+    expect(body.exceedsLimit).toBe(false);
+    expect(body.limit).toBeDefined();
+  });
+
+  it("handles p1/p2 positional matching", async () => {
+    await Replay.create({
+      filePath: "/test/rp1.slp", fileHash: "rp1", fileSize: 100000,
+      players: [
+        { playerIndex: 0, connectCode: "POS#1", characterId: 2, characterName: "Fox" },
+        { playerIndex: 1, connectCode: "POS#2", characterId: 9, characterName: "Marth" },
+      ],
+    });
+    await Replay.create({
+      filePath: "/test/rp2.slp", fileHash: "rp2", fileSize: 100000,
+      players: [
+        { playerIndex: 0, connectCode: "POS#3", characterId: 2, characterName: "Fox" },
+        { playerIndex: 1, connectCode: "POS#4", characterId: 20, characterName: "Falco" },
+      ],
+    });
+
+    const { status, body } = await post("/api/replays/estimate", {
+      p1ConnectCode: "POS#1",
+      p2ConnectCode: "POS#2",
+    });
+
+    expect(status).toBe(200);
+    expect(body.replayCount).toBe(1);
+  });
+
+  it("rejects when no filter provided", async () => {
+    const { status, body } = await post("/api/replays/estimate", {});
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/filter/i);
+  });
+});
+
 describe("GET /api/replays", () => {
   it("returns empty list when no replays", async () => {
     const { status, body } = await get("/api/replays");
@@ -64,8 +126,8 @@ describe("GET /api/replays", () => {
   });
 
   it("returns replays", async () => {
-    await Replay.create({ filePath: "/test/a.slp", fileHash: "a" });
-    await Replay.create({ filePath: "/test/b.slp", fileHash: "b" });
+    await Replay.create({ filePath: "/test/a.slp", fileHash: "a", stageId: 31, players: [{ playerIndex: 0, connectCode: "A#1", characterId: 2, characterName: "Fox" }] });
+    await Replay.create({ filePath: "/test/b.slp", fileHash: "b", stageId: 8, players: [{ playerIndex: 0, connectCode: "B#1", characterId: 9, characterName: "Marth" }] });
 
     const { body } = await get("/api/replays");
     expect(body.replays.length).toBe(2);
@@ -83,14 +145,14 @@ describe("GET /api/replays", () => {
       players: [{ playerIndex: 0, connectCode: "MARTH#2", characterId: 9, characterName: "Marth" }],
     });
 
-    const { body } = await get("/api/replays?connectCode=FOX%231");
+    const { body } = await get("/api/replays?p1ConnectCode=FOX%231");
     expect(body.replays.length).toBe(1);
     expect(body.replays[0].players[0].connectCode).toBe("FOX#1");
   });
 
   it("filters by stageId", async () => {
-    await Replay.create({ filePath: "/test/a.slp", fileHash: "a", stageId: 31 });
-    await Replay.create({ filePath: "/test/b.slp", fileHash: "b", stageId: 8 });
+    await Replay.create({ filePath: "/test/a.slp", fileHash: "a", stageId: 31, players: [{ playerIndex: 0, connectCode: "S#1", characterId: 2, characterName: "Fox" }] });
+    await Replay.create({ filePath: "/test/b.slp", fileHash: "b", stageId: 8, players: [{ playerIndex: 0, connectCode: "S#2", characterId: 9, characterName: "Marth" }] });
 
     const { body } = await get("/api/replays?stageId=31");
     expect(body.replays.length).toBe(1);
@@ -98,7 +160,7 @@ describe("GET /api/replays", () => {
 
   it("paginates correctly", async () => {
     for (let i = 0; i < 5; i++) {
-      await Replay.create({ filePath: `/test/${i}.slp`, fileHash: `${i}` });
+      await Replay.create({ filePath: `/test/${i}.slp`, fileHash: `${i}`, stageId: 31, players: [{ playerIndex: 0, connectCode: `P${i}#1`, characterId: 2, characterName: "Fox" }] });
     }
 
     const { body } = await get("/api/replays?limit=2&page=1");
@@ -227,7 +289,7 @@ describe("GET /api/jobs/:id/download", () => {
 
 describe("GET /api/stats", () => {
   it("returns replay count and job counts", async () => {
-    await Replay.create({ filePath: "/test/s.slp", fileHash: "s" });
+    await Replay.create({ filePath: "/test/s.slp", fileHash: "s", stageId: 31, players: [{ playerIndex: 0, connectCode: "S#1", characterId: 2, characterName: "Fox" }] });
     await Job.create({ filter: {} });
 
     const { status, body } = await get("/api/stats");
