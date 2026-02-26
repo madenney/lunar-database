@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { Player } from "../models/Player";
+import { sendError } from "../utils/sendError";
 
 const router = Router();
 
@@ -29,7 +30,7 @@ router.get("/autocomplete", async (req: Request, res: Response) => {
 
     res.json(results);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
@@ -59,7 +60,7 @@ router.get("/search", async (req: Request, res: Response) => {
 
     res.json(results);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 

@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import mongoose from "mongoose";
 import { Replay } from "../models/Replay";
 import { Job } from "../models/Job";
+import { sendError } from "../utils/sendError";
 
 const router = Router();
 
@@ -41,7 +42,7 @@ router.get("/", async (_req: Request, res: Response) => {
       totalFileSizeBytes: totalSizeAgg[0]?.totalSize ?? 0,
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 

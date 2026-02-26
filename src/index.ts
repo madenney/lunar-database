@@ -1,20 +1,65 @@
+import fs from "fs";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { config } from "./config";
 import { connectDb } from "./db";
-import { startWorker } from "./workers/jobWorker";
-import { cleanupExpiredR2Bundles } from "./services/r2Cleanup";
+import { Job } from "./models/Job";
+import { cleanupJobTemp, cleanupOrphanedTemp } from "./services/bundler";
+import { startCompressor, stopCompressor } from "./workers/compressWorker";
+import { startUploader, stopUploader } from "./workers/uploadWorker";
 import replayRoutes from "./routes/replays";
 import jobRoutes from "./routes/jobs";
 import statsRoutes from "./routes/stats";
 import playersRoutes from "./routes/players";
 import referenceRoutes from "./routes/reference";
 import submissionsRoutes from "./routes/submissions";
+import adminRoutes from "./routes/admin";
+
+async function recoverStaleJobs() {
+  // processing/compressing → pending (start over, temp files are unreliable after crash)
+  const staleCompressing = await Job.find({ status: { $in: ["processing", "compressing"] } });
+  for (const job of staleCompressing) {
+    const was = job.status;
+    cleanupJobTemp(job._id.toString());
+    job.status = "pending";
+    job.startedAt = null;
+    job.progress = null;
+    job.error = null;
+    await job.save();
+    console.log(`Recovered stale job ${job._id} (was ${was}) → pending`);
+  }
+
+  // uploading → compressed if tar exists, else pending
+  const staleUploading = await Job.find({ status: "uploading" });
+  for (const job of staleUploading) {
+    if (job.bundlePath && fs.existsSync(job.bundlePath)) {
+      job.status = "compressed";
+      job.progress = null;
+      await job.save();
+      console.log(`Recovered stale job ${job._id} (was uploading) → compressed`);
+    } else {
+      cleanupJobTemp(job._id.toString());
+      job.status = "pending";
+      job.startedAt = null;
+      job.progress = null;
+      job.bundlePath = null;
+      job.bundleSize = null;
+      await job.save();
+      console.log(`Recovered stale job ${job._id} (was uploading, no tar) → pending`);
+    }
+  }
+}
 
 async function main() {
   await connectDb();
 
   const app = express();
+
+  // Security headers
+  app.use(helmet());
+
   app.use(cors({
     origin: [
       "https://lunarmelee.com",
@@ -24,32 +69,80 @@ async function main() {
   }));
   app.use(express.json());
 
+  // Global rate limit: 100 requests per minute per IP
+  app.use(rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+  }));
+
+  // Strict rate limit on login: 5 attempts per 15 minutes
+  app.use("/api/admin/login", rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many login attempts, please try again later" },
+  }));
+
+  // Request logging
+  app.use((req, _res, next) => {
+    console.log(`${req.method} ${req.path} [${req.ip}]`);
+    next();
+  });
+
   app.use("/api/replays", replayRoutes);
   app.use("/api/jobs", jobRoutes);
   app.use("/api/stats", statsRoutes);
   app.use("/api/players", playersRoutes);
   app.use("/api/reference", referenceRoutes);
   app.use("/api/submissions", submissionsRoutes);
+  app.use("/api/admin", adminRoutes);
 
   // Health check
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log(`Server listening on port ${config.port}`);
   });
 
-  // Start job worker
-  startWorker();
+  // Recover jobs left in intermediate states from a previous crash
+  await recoverStaleJobs();
 
-  // Periodic R2 bundle cleanup (every hour)
-  setInterval(async () => {
-    try {
-      const cleaned = await cleanupExpiredR2Bundles();
-      if (cleaned > 0) console.log(`Expired ${cleaned} R2 bundles`);
-    } catch (err) {
-      console.error("R2 cleanup error:", (err as Error).message);
-    }
-  }, 60 * 60 * 1000);
+  // Clean up orphaned temp files from previous crashes (older than 24h)
+  const orphansCleaned = await cleanupOrphanedTemp();
+  if (orphansCleaned > 0) {
+    console.log(`Cleaned ${orphansCleaned} orphaned temp entries`);
+  }
+
+  // Start job workers
+  startCompressor();
+  startUploader();
+
+  // Graceful shutdown
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n${signal} received — shutting down gracefully...`);
+
+    stopCompressor();
+    stopUploader();
+
+    server.close(() => {
+      console.log("HTTP server closed");
+    });
+
+    // Give workers a moment to finish their current poll cycle
+    await new Promise((r) => setTimeout(r, 2000));
+
+    console.log("Shutdown complete");
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 main().catch((err) => {

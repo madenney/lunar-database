@@ -9,13 +9,20 @@ jest.mock("../config", () => ({
     jobTempDir: path.join(os.tmpdir(), "lm-test-job-temp-" + process.pid),
     bundlesDir: path.join(os.tmpdir(), "lm-test-bundles-" + process.pid),
     bundleMaxAgeHours: 0, // expire immediately for cleanup test
+    minFreeDiskMb: 100,
+    slpzTimeoutMinutes: 30,
   },
 }));
 
-// Mock execFile for slpz and tar
+// Mock execFile for slpz, tar, df, and du
 jest.mock("child_process", () => ({
-  execFile: jest.fn((cmd: string, args: string[], callback: Function) => {
-    const { config } = require("../config");
+  execFile: jest.fn((cmd: string, args: string[], ...rest: any[]) => {
+    // Support both (cmd, args, callback) and (cmd, args, opts, callback) signatures
+    const callback = typeof rest[rest.length - 1] === "function" ? rest[rest.length - 1] : undefined;
+    if (!callback) {
+      // promisify path — return via callback style anyway (promisify wraps it)
+      throw new Error(`execFile mock: no callback for ${cmd}`);
+    }
 
     if (cmd === "slpz") {
       // Simulate slpz: rename .slp files to .slpz in the target dir
@@ -31,16 +38,19 @@ jest.mock("child_process", () => ({
       }
       callback(null, { stdout: "", stderr: "" });
     } else if (cmd === "tar") {
-      // Simulate tar: create a dummy tar file
       const cfIndex = args.indexOf("-cf");
       if (cfIndex !== -1) {
         const tarPath = args[cfIndex + 1];
         const sourceDir = args[args.indexOf("-C") + 1];
-        // Write a simple file with the contents to simulate a tar
         const files = fs.existsSync(sourceDir) ? fs.readdirSync(sourceDir) : [];
         fs.writeFileSync(tarPath, `tar-mock: ${files.join(",")}`);
       }
       callback(null, { stdout: "", stderr: "" });
+    } else if (cmd === "df") {
+      // Return plenty of free space (10GB)
+      callback(null, { stdout: "     Avail\n10737418240\n", stderr: "" });
+    } else if (cmd === "du") {
+      callback(null, { stdout: "1024\t" + args[args.length - 1], stderr: "" });
     } else {
       callback(new Error(`Unexpected command: ${cmd}`));
     }

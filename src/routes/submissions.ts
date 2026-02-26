@@ -7,12 +7,14 @@ import { Submission } from "../models/Submission";
 import { Upload } from "../models/Upload";
 import { Replay } from "../models/Replay";
 import { parseSlpFile } from "../services/slpParser";
-import { processUpload } from "../workers/uploadWorker";
+import { processUpload } from "../workers/submissionWorker";
+import { requireAdmin } from "../middleware/auth";
+import { sendError } from "../utils/sendError";
 
 const router = Router();
 
 // POST /api/submissions/upload — stream a .slp or .zip file to disk, then process
-router.post("/upload", async (req: Request, res: Response) => {
+router.post("/upload", requireAdmin, async (req: Request, res: Response) => {
   try {
     const filename = req.headers["x-filename"] as string;
     if (!filename) {
@@ -88,22 +90,22 @@ router.post("/upload", async (req: Request, res: Response) => {
       res.status(500).json({ error: "Failed to write file" });
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // GET /api/submissions/uploads — list uploads
-router.get("/uploads", async (req: Request, res: Response) => {
+router.get("/uploads", requireAdmin, async (req: Request, res: Response) => {
   try {
     const uploads = await Upload.find().sort({ createdAt: -1 }).limit(100).lean();
     res.json(uploads);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // GET /api/submissions/uploads/:id — check upload status
-router.get("/uploads/:id", async (req: Request, res: Response) => {
+router.get("/uploads/:id", requireAdmin, async (req: Request, res: Response) => {
   try {
     const upload = await Upload.findById(req.params.id).lean();
     if (!upload) {
@@ -112,17 +114,17 @@ router.get("/uploads/:id", async (req: Request, res: Response) => {
     }
     res.json(upload);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // GET /api/submissions — list submissions (filterable by status, uploadId)
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", requireAdmin, async (req: Request, res: Response) => {
   try {
     const { status = "pending", uploadId, page = "1", limit = "50" } = req.query;
     const query: Record<string, any> = {};
-    if (status !== "all") query.status = status;
-    if (uploadId) query.uploadId = uploadId;
+    if (status !== "all") query.status = String(status);
+    if (uploadId) query.uploadId = String(uploadId);
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
@@ -138,12 +140,12 @@ router.get("/", async (req: Request, res: Response) => {
       pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // GET /api/submissions/:id
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
   try {
     const submission = await Submission.findById(req.params.id).lean();
     if (!submission) {
@@ -152,12 +154,12 @@ router.get("/:id", async (req: Request, res: Response) => {
     }
     res.json(submission);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // POST /api/submissions/:id/approve — move from airlock into the main database
-router.post("/:id/approve", async (req: Request, res: Response) => {
+router.post("/:id/approve", requireAdmin, async (req: Request, res: Response) => {
   try {
     const submission = await Submission.findById(req.params.id);
     if (!submission) {
@@ -216,12 +218,12 @@ router.post("/:id/approve", async (req: Request, res: Response) => {
 
     res.json({ status: "approved", replayId: replay._id });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // POST /api/submissions/:id/reject — reject and delete the file
-router.post("/:id/reject", async (req: Request, res: Response) => {
+router.post("/:id/reject", requireAdmin, async (req: Request, res: Response) => {
   try {
     const submission = await Submission.findById(req.params.id);
     if (!submission) {
@@ -244,7 +246,7 @@ router.post("/:id/reject", async (req: Request, res: Response) => {
 
     res.json({ status: "rejected" });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 

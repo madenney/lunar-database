@@ -62,28 +62,28 @@ describe("Replay model", () => {
 describe("Job model", () => {
   it("creates a job with default status pending", async () => {
     const job = await Job.create({
-      filter: { connectCode: "TEST#123" },
+      filter: { p1ConnectCode: "TEST#123" },
     });
 
     expect(job.status).toBe("pending");
-    expect(job.filter.connectCode).toBe("TEST#123");
+    expect(job.filter.p1ConnectCode).toBe("TEST#123");
     expect(job.bundlePath).toBeNull();
   });
 
   it("stores filter fields", async () => {
     const job = await Job.create({
       filter: {
-        connectCode: "A#1",
-        characterId: 2,
-        stageId: 31,
-        startDate: new Date("2023-01-01"),
-        endDate: new Date("2024-01-01"),
+        p1ConnectCode: "A#1",
+        p1CharacterId: "2",
+        stageId: "31",
+        startDate: "2023-01-01",
+        endDate: "2024-01-01",
       },
     });
 
-    expect(job.filter.connectCode).toBe("A#1");
-    expect(job.filter.characterId).toBe(2);
-    expect(job.filter.stageId).toBe(31);
+    expect(job.filter.p1ConnectCode).toBe("A#1");
+    expect(job.filter.p1CharacterId).toBe("2");
+    expect(job.filter.stageId).toBe("31");
   });
 });
 

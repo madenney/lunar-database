@@ -1,105 +1,108 @@
-import path from "path";
-import fs from "fs";
-import crypto from "crypto";
-import unzipper from "unzipper";
-import { Upload } from "../models/Upload";
-import { Submission } from "../models/Submission";
-import { parseSlpFile } from "../services/slpParser";
-import { config } from "../config";
+import { Job } from "../models/Job";
+import { uploadToR2, deleteFromR2 } from "../services/r2";
+import { cleanupJobTemp } from "../services/bundler";
 
-async function createSubmissionFromSlp(
-  slpPath: string,
-  originalFilename: string,
-  submittedBy: string | null,
-  uploadId: string
-): Promise<void> {
-  let parsed;
-  try {
-    parsed = parseSlpFile(slpPath);
-  } catch {
-    parsed = { stageId: null, stageName: null, startAt: null, duration: null, players: [], winner: null };
-  }
+let currentJobId: string | null = null;
+let running = false;
 
-  await Submission.create({
-    uploadId,
-    originalFilename,
-    airlockPath: slpPath,
-    submittedBy,
-    ...parsed,
-  });
+async function isCancelled(jobId: string): Promise<boolean> {
+  const job = await Job.findById(jobId).select("status").lean();
+  return !job || job.status === "cancelled";
 }
 
-async function extractZip(upload: InstanceType<typeof Upload>): Promise<number> {
-  let count = 0;
-  let errors = 0;
-  const dir = config.airlockDir;
-
-  const directory = await unzipper.Open.file(upload.diskPath);
-  for (const entry of directory.files) {
-    if (entry.type !== "File" || !entry.path.endsWith(".slp")) continue;
-
-    const unique = crypto.randomBytes(8).toString("hex");
-    const basename = path.basename(entry.path);
-    const destPath = path.join(dir, `${unique}-${basename}`);
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        entry.stream()
-          .pipe(fs.createWriteStream(destPath))
-          .on("finish", resolve)
-          .on("error", reject);
-      });
-
-      await createSubmissionFromSlp(destPath, basename, upload.submittedBy, upload._id.toString());
-      count++;
-    } catch (err) {
-      errors++;
-      console.error(`Upload ${upload._id}: failed on ${basename}:`, (err as Error).message);
-      // Clean up the extracted file if it exists
-      try { fs.unlinkSync(destPath); } catch {}
-    }
-
-    if (count % 100 === 0 && count > 0) {
-      console.log(`Upload ${upload._id}: extracted ${count} files (${errors} errors)...`);
-    }
-  }
-
-  // Remove the zip after extraction
-  try { fs.unlinkSync(upload.diskPath); } catch {}
-
-  if (errors > 0) {
-    console.warn(`Upload ${upload._id}: completed with ${errors} errors out of ${count + errors} .slp files`);
-  }
-
-  return count;
+export function isUploaderRunning(): boolean {
+  return running;
 }
 
-export async function processUpload(uploadId: string): Promise<void> {
-  const upload = await Upload.findById(uploadId);
-  if (!upload) throw new Error(`Upload ${uploadId} not found`);
+export function getUploaderJobId(): string | null {
+  return currentJobId;
+}
+
+export async function processNextUpload(): Promise<boolean> {
+  const job = await Job.findOneAndUpdate(
+    { status: "compressed" },
+    { status: "uploading" },
+    { sort: { priority: 1, createdAt: 1 }, new: true }
+  );
+
+  if (!job) return false;
+
+  const jobId = job._id.toString();
+  currentJobId = jobId;
 
   try {
-    const ext = path.extname(upload.originalFilename).toLowerCase();
+    // Uploading step
+    job.progress = { step: "uploading", filesProcessed: 0, filesTotal: 1 };
+    await job.save();
 
-    if (ext === ".slp") {
-      await createSubmissionFromSlp(
-        upload.diskPath,
-        upload.originalFilename,
-        upload.submittedBy,
-        upload._id.toString()
+    const r2Key = `jobs/${jobId}.tar`;
+    await uploadToR2(job.bundlePath!, r2Key);
+
+    // Cancellation checkpoint: after upload
+    if (await isCancelled(jobId)) {
+      console.log(`Job ${jobId} cancelled after upload, deleting R2 object`);
+      await deleteFromR2(r2Key).catch((err) =>
+        console.error(`Failed to delete R2 key ${r2Key}:`, err.message)
       );
-      upload.slpCount = 1;
-    } else if (ext === ".zip") {
-      upload.slpCount = await extractZip(upload);
+      cleanupJobTemp(jobId);
+      return true;
     }
 
-    upload.status = "done";
-    await upload.save();
-    console.log(`Upload ${upload._id} done: ${upload.slpCount} .slp files`);
+    job.status = "completed";
+    job.r2Key = r2Key;
+    job.progress = null;
+    job.completedAt = new Date();
+    await job.save();
+
+    // Clean up local temp files
+    cleanupJobTemp(jobId);
+
+    console.log(
+      `Job ${jobId} uploaded: ${(job.bundleSize! / 1024 / 1024).toFixed(1)}MB to R2`
+    );
   } catch (err) {
-    upload.status = "failed";
-    upload.error = (err as Error).message;
-    await upload.save();
-    console.error(`Upload ${upload._id} failed:`, (err as Error).message);
+    try {
+      job.status = "failed";
+      job.error = (err as Error).message;
+      job.progress = null;
+      await job.save();
+    } catch (saveErr) {
+      console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message);
+      await Job.updateOne(
+        { _id: jobId },
+        { status: "failed", error: (err as Error).message, progress: null }
+      ).catch(() => {});
+    }
+
+    cleanupJobTemp(jobId);
+
+    console.error(`Job ${jobId} upload failed:`, (err as Error).message);
+  } finally {
+    currentJobId = null;
   }
+
+  return true;
+}
+
+export function startUploader(intervalMs = 5000): void {
+  running = true;
+  console.log("Uploader worker started");
+
+  const tick = async () => {
+    if (!running) return;
+    try {
+      const hadWork = await processNextUpload();
+      setTimeout(tick, hadWork ? 0 : intervalMs);
+    } catch (err) {
+      console.error("Uploader error:", (err as Error).message);
+      setTimeout(tick, intervalMs);
+    }
+  };
+
+  tick();
+}
+
+export function stopUploader(): void {
+  running = false;
+  console.log("Uploader worker stopped");
 }

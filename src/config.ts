@@ -17,10 +17,24 @@ export const config = {
   r2BucketName: process.env.R2_BUCKET_NAME || "lm-replays",
 
   // Job settings
-  jobMaxReplays: parseInt(process.env.JOB_MAX_REPLAYS || "5000", 10),
   jobBundleExpiryHours: parseInt(process.env.JOB_BUNDLE_EXPIRY_HOURS || "48", 10),
   jobTempDir: process.env.JOB_TEMP_DIR || "/tmp/lm-job-temp",
+  jobMaxConcurrentPerClient: parseInt(process.env.JOB_MAX_CONCURRENT_PER_CLIENT || "3", 10),
+  jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "50", 10),
+
+  // Worker safety limits
+  jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "60", 10),
+  slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
+  minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
 
   // Estimate settings
   estimateUploadSpeedMbps: parseInt(process.env.ESTIMATE_UPLOAD_SPEED_MBPS || "10", 10),
+
+  // Auth
+  jwtSecret: (() => {
+    if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+    if (process.env.NODE_ENV === "test") return "test-secret";
+    throw new Error("JWT_SECRET environment variable is required");
+  })(),
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "24h",
 };

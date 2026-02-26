@@ -10,13 +10,32 @@ All responses are JSON. Errors return `{ "error": "message" }`.
 
 ## Table of Contents
 
+- [Authentication](#authentication)
 - [Replays](#replays)
+- [Estimates](#estimates)
 - [Download Jobs](#download-jobs)
 - [Players](#players)
 - [Stats](#stats)
 - [Reference Data](#reference-data)
-- [Submissions](#submissions)
+- [Health Check](#health-check)
 - [Data Types](#data-types)
+- [Resource Limits](#resource-limits)
+- [Rate Limits](#rate-limits)
+- [CORS](#cors)
+
+---
+
+## Authentication
+
+### Client Identity
+
+Most endpoints are public. For job management (creating, listing, and cancelling download jobs), the API uses a lightweight client identity system via the `X-Client-Id` header.
+
+| Header | Description |
+|---|---|
+| `X-Client-Id` | A UUID generated and persisted in the frontend's `localStorage`. Not a login — just a stable anonymous identifier so users can track their own jobs. |
+
+Endpoints that require `X-Client-Id` are marked below.
 
 ---
 
@@ -45,7 +64,7 @@ Search and filter the replay archive with pagination. Automatically excludes jun
 | `endDate` | string | ISO 8601 date. Only replays on or before this date. |
 | `sort` | string | Sort field and direction as `field:direction`. Allowed fields: `startAt`, `indexedAt`, `duration`. Direction: `1` (ascending) or `-1` (descending). Default: `startAt:-1`. |
 | `page` | number | Page number (1-indexed). Default: `1`. |
-| `limit` | number | Results per page. Default: `50`. |
+| `limit` | number | Results per page. Default: `50`, max: `200`. |
 
 When both `p1` and `p2` filters are provided, they must match *different* players in the game (useful for searching head-to-head matchups).
 
@@ -56,7 +75,6 @@ When both `p1` and `p2` filters are provided, they must match *different* player
   "replays": [
     {
       "_id": "6651a...",
-      "filePath": "/data/slp/netplay/2024-01/Game_20240115T201532.slp",
       "fileHash": "a1b2c3...",
       "fileSize": 245760,
       "stageId": 31,
@@ -95,6 +113,8 @@ When both `p1` and `p2` filters are provided, they must match *different* player
 }
 ```
 
+Note: `filePath` is excluded from search results.
+
 **Examples**
 
 ```bash
@@ -116,9 +136,9 @@ curl "https://api.lunarmelee.com/api/replays?stageId=28,2&sort=duration:-1"
 GET /api/replays/:id
 ```
 
-Get full details for a single replay.
+Get full details for a single replay. `filePath` is excluded.
 
-**Response** `200` — The full [Replay](#replay) object.
+**Response** `200` — The [Replay](#replay) object.
 
 **Response** `404` — `{ "error": "Replay not found" }`
 
@@ -140,7 +160,7 @@ Download the raw `.slp` file for a single replay.
 
 ## Estimates
 
-### Estimate Replay Download (Full Filters)
+### Estimate Download (Full Filters)
 
 ```
 POST /api/replays/estimate
@@ -161,7 +181,7 @@ Estimate replay count, compressed download size, and processing ETA using the fu
 }
 ```
 
-All fields are optional, but **at least one filter is required**. Values are comma-separated strings (same format as the search query params).
+All fields are optional. Values are comma-separated strings (same format as the search query params).
 
 | Field | Type | Description |
 |---|---|---|
@@ -174,6 +194,8 @@ All fields are optional, but **at least one filter is required**. Values are com
 | `stageId` | string | Stage ID(s), comma-separated. |
 | `startDate` | string | ISO 8601 date. Games on or after. |
 | `endDate` | string | ISO 8601 date. Games on or before. |
+| `maxFiles` | number | Maximum number of replays to include. Applied before `maxSizeMb`. |
+| `maxSizeMb` | number | Maximum total raw file size in megabytes. Applied after `maxFiles`. |
 
 **Response** `200`
 
@@ -181,85 +203,27 @@ All fields are optional, but **at least one filter is required**. Values are com
 {
   "replayCount": 342,
   "rawSize": 83886080,
-  "estimatedCompressedSize": 10485760,
+  "estimatedSlpzSize": 10485760,
+  "estimatedTarSize": 10836352,
   "estimatedTimeSec": 45,
-  "exceedsLimit": false,
-  "limit": 5000
+  "totalDurationFrames": 2160000
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `replayCount` | number | Number of matching replays. |
-| `rawSize` | number | Total raw file size in bytes. |
-| `estimatedCompressedSize` | number | Estimated compressed size in bytes (conservative 8x estimate). |
+| `rawSize` | number | Total raw `.slp` file size in bytes. |
+| `estimatedSlpzSize` | number | Estimated size after slpz compression in bytes (`rawSize / 8`). |
+| `estimatedTarSize` | number | Estimated `.tar` archive size in bytes (`estimatedSlpzSize + replayCount * 1024`). |
 | `estimatedTimeSec` | number | Estimated processing time in seconds (compression + upload). |
-| `exceedsLimit` | boolean | Whether the count exceeds the per-job maximum. |
-| `limit` | number | Maximum replays allowed per job. |
-
-**Response** `400` — No filter provided.
+| `totalDurationFrames` | number | Sum of all matching replay durations in frames (60 fps). |
 
 ---
 
 ## Download Jobs
 
-Request bulk downloads of replays matching a filter. Replays are compressed with [slpz](https://github.com/Walnut356/slpz) (~8-12x smaller than raw .slp) and packaged into a `.tar` archive. The archive is uploaded to CDN storage and a download link is returned.
-
-Download links expire after 48 hours.
-
-### Estimate Download (Simple Filters)
-
-```
-POST /api/jobs/estimate
-```
-
-Preview how many replays match a filter and the estimated download size before creating a job. Uses simple filter syntax (single values only). For full p1/p2 positional matching, use [POST /api/replays/estimate](#estimate-replay-download-full-filters) instead.
-
-**Request Body**
-
-```json
-{
-  "connectCode": "AKLO#0",
-  "characterId": 20,
-  "stageId": 31,
-  "startDate": "2024-01-01",
-  "endDate": "2024-12-31"
-}
-```
-
-All fields are optional, but **at least one filter is required**.
-
-| Field | Type | Description |
-|---|---|---|
-| `connectCode` | string | Slippi connect code. |
-| `characterId` | number | Character ID. |
-| `stageId` | number | Stage ID. |
-| `startDate` | string | ISO 8601 date. Games on or after. |
-| `endDate` | string | ISO 8601 date. Games on or before. |
-
-**Response** `200`
-
-```json
-{
-  "replayCount": 342,
-  "rawSize": 83886080,
-  "estimatedCompressedSize": 10485760,
-  "exceedsLimit": false,
-  "limit": 5000
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `replayCount` | number | Number of matching replays. |
-| `rawSize` | number | Total raw file size in bytes. |
-| `estimatedCompressedSize` | number | Estimated compressed size in bytes (conservative 8x estimate). |
-| `exceedsLimit` | boolean | Whether the count exceeds the per-job maximum. |
-| `limit` | number | Maximum replays allowed per job. |
-
-**Response** `400` — No filter provided.
-
----
+Request bulk downloads of replays matching a filter. Replays are compressed with [slpz](https://github.com/Walnut356/slpz) (~8x smaller than raw .slp) and packaged into a `.tar` archive. The archive is uploaded to CDN storage (Cloudflare R2) and a download link is provided.
 
 ### Create Download Job
 
@@ -269,7 +233,42 @@ POST /api/jobs
 
 Create a download job. The server will asynchronously compress and upload the matching replays. Poll the [job status](#get-job-status) endpoint to track progress.
 
-**Request Body** — Same as [Estimate Download](#estimate-download). At least one filter is required.
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Client-Id` | Yes | Client identity UUID. Used to associate the job with your session. |
+
+**Request Body** — Same filter fields as [POST /api/replays/estimate](#estimate-download-full-filters). Use the estimate endpoint first to preview counts and sizes.
+
+```json
+{
+  "p1ConnectCode": "AKLO#0",
+  "p1CharacterId": "20",
+  "p2CharacterId": "2",
+  "stageId": "31",
+  "startDate": "2024-01-01",
+  "endDate": "2024-12-31"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `p1ConnectCode` | string | Player 1 connect code(s), comma-separated. |
+| `p1CharacterId` | string | Player 1 character ID(s), comma-separated. |
+| `p1DisplayName` | string | Player 1 display name(s), comma-separated (prefix match). |
+| `p2ConnectCode` | string | Player 2 connect code(s), comma-separated. |
+| `p2CharacterId` | string | Player 2 character ID(s), comma-separated. |
+| `p2DisplayName` | string | Player 2 display name(s), comma-separated (prefix match). |
+| `stageId` | string | Stage ID(s), comma-separated. |
+| `startDate` | string | ISO 8601 date. Games on or after. |
+| `endDate` | string | ISO 8601 date. Games on or before. |
+| `maxFiles` | number | Maximum number of replays to include. Applied before `maxSizeMb`. |
+| `maxSizeMb` | number | Maximum total raw file size in megabytes. Applied after `maxFiles`. |
+
+All fields are optional, but at least one search filter (not just `maxFiles`/`maxSizeMb`) is required. The same filter can be passed to both `POST /api/replays/estimate` and `POST /api/jobs`.
+
+The server stores `replayCount`, `estimatedSize`, and `estimatedProcessingTime` on the job at creation for queue position and ETA calculations.
 
 **Response** `201`
 
@@ -280,11 +279,91 @@ Create a download job. The server will asynchronously compress and upload the ma
 }
 ```
 
-**Response** `400`
+**Response** `400` — `{ "error": "No replays match this filter" }`
 
-- No filter provided
-- No replays match the filter
-- Replay count exceeds the limit (narrow your filter)
+**Response** `429` — `{ "error": "You already have 3 active job(s). Maximum is 3. Wait for one to finish or cancel it." }` — Per-client concurrent job limit reached. Applies to jobs in `pending`, `processing`, `compressing`, `compressed`, or `uploading` status.
+
+**Response** `503` — `{ "error": "Job queue is full (50 pending). Try again later." }` — Global pending queue is at capacity.
+
+---
+
+### List My Jobs
+
+```
+GET /api/jobs
+```
+
+List download jobs created by the current client, newest first.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Client-Id` | Yes | Must match the ID used when creating jobs. |
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | number | `1` | Page number. |
+| `limit` | number | `20` | Results per page, max `100`. |
+
+**Response** `200`
+
+```json
+{
+  "jobs": [
+    {
+      "_id": "6651a...",
+      "status": "completed",
+      "filter": {
+        "p1ConnectCode": "AKLO#0"
+      },
+      "replayCount": 342,
+      "bundleSize": 10836352,
+      "progress": null,
+      "error": null,
+      "downloadReady": true,
+      "createdAt": "2024-06-01T12:00:00.000Z",
+      "completedAt": "2024-06-01T12:05:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 3,
+    "pages": 1
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `downloadReady` | boolean | `true` when the job is completed and the archive is available for download. |
+
+---
+
+### Cancel My Job
+
+```
+DELETE /api/jobs/:id
+```
+
+Cancel one of your own active jobs. Only works on jobs with status `pending`, `processing`, `compressing`, `compressed`, or `uploading`.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Client-Id` | Yes | Must match the `createdBy` on the job. |
+
+**Response** `200` — `{ "message": "Job cancelled" }`
+
+**Response** `403` — `{ "error": "Not your job" }`
+
+**Response** `400` — `{ "error": "Cannot cancel a completed job" }` (or similar for the current status)
+
+**Response** `404` — `{ "error": "Job not found" }`
 
 ---
 
@@ -294,7 +373,7 @@ Create a download job. The server will asynchronously compress and upload the ma
 GET /api/jobs/:id
 ```
 
-Check the status and progress of a download job. Poll this endpoint to track the job through its lifecycle.
+Check the status and progress of a download job. Poll this endpoint to track the job through its lifecycle. No authentication required — anyone with the job ID can check status.
 
 **Response** `200`
 
@@ -305,14 +384,18 @@ Check the status and progress of a download job. Poll this endpoint to track the
   "replayCount": 342,
   "estimatedSize": 83886080,
   "bundleSize": null,
-  "downloadUrl": null,
-  "expiresAt": null,
+  "downloadReady": false,
+  "downloadCount": 0,
   "progress": {
     "step": "compressing",
     "filesProcessed": 150,
     "filesTotal": 342
   },
   "error": null,
+  "queuePosition": 0,
+  "estimatedWaitSec": 0,
+  "estimatedProcessingTimeSec": 85,
+  "startedAt": "2024-06-01T12:00:05.000Z",
   "createdAt": "2024-06-01T12:00:00.000Z",
   "completedAt": null
 }
@@ -322,13 +405,14 @@ Check the status and progress of a download job. Poll this endpoint to track the
 
 | Status | Description |
 |---|---|
-| `pending` | Job is queued, waiting to be picked up. |
-| `processing` | Worker has claimed the job and is querying replays. |
+| `pending` | Job is queued, waiting to be picked up by the compressor. |
+| `processing` | Compressor has claimed the job and is querying replays. |
 | `compressing` | Compressing .slp files with slpz. `progress` is updated during this step. |
+| `compressed` | Compression complete, waiting for the uploader to pick it up. |
 | `uploading` | Uploading compressed archive to CDN. |
-| `completed` | Done. `downloadUrl` and `expiresAt` are set. |
+| `completed` | Done. `downloadReady` is `true`. |
 | `failed` | Something went wrong. See `error` field. |
-| `expired` | Download link has expired (48 hours after completion). |
+| `cancelled` | Job was cancelled by the user or an admin. |
 
 **Response Fields**
 
@@ -339,10 +423,14 @@ Check the status and progress of a download job. Poll this endpoint to track the
 | `replayCount` | number | Number of matching replays. |
 | `estimatedSize` | number \| null | Raw file size in bytes before compression. |
 | `bundleSize` | number \| null | Final compressed archive size in bytes. Set when completed. |
-| `downloadUrl` | string \| null | Presigned CDN download URL. Set when completed, cleared when expired. |
-| `expiresAt` | string \| null | ISO 8601 timestamp when the download link expires. |
-| `progress` | object \| null | `{ step, filesProcessed, filesTotal }` during compressing/uploading, null otherwise. |
+| `downloadReady` | boolean | `true` when the job is completed and the archive is available. |
+| `downloadCount` | number | Number of times this bundle has been downloaded. |
+| `progress` | object \| null | `{ step, filesProcessed, filesTotal }` during compressing/uploading. |
 | `error` | string \| null | Error message if failed. |
+| `queuePosition` | number \| null | 1-based position in queue (1 = next up). `0` = currently processing. `null` for terminal statuses. |
+| `estimatedWaitSec` | number \| null | Estimated seconds until the job starts processing. Includes remaining time of active job. `null` for terminal statuses. |
+| `estimatedProcessingTimeSec` | number \| null | Estimated seconds for this job to process. Remaining time if active. `null` for terminal statuses. |
+| `startedAt` | string \| null | ISO 8601 timestamp when the worker started processing. `null` while pending. |
 | `createdAt` | string | ISO 8601 timestamp. |
 | `completedAt` | string \| null | ISO 8601 timestamp when the job finished. |
 
@@ -356,17 +444,65 @@ Check the status and progress of a download job. Poll this endpoint to track the
 GET /api/jobs/:id/download
 ```
 
-Redirects to the presigned CDN download URL. The download is a `.tar` archive containing `.slpz` compressed replay files.
+Redirects to a fresh presigned CDN download URL (valid for 1 hour). The download is a `.tar` archive containing `.slpz` compressed replay files. Each download increments the job's `downloadCount`.
 
 To decompress the replays, extract the tar and run [slpz](https://github.com/Walnut356/slpz) to convert `.slpz` back to `.slp`.
 
-**Response** `302` — Redirect to CDN download URL.
+**Response** `302` — Redirect to presigned R2 download URL.
 
-**Response** `400` — `{ "error": "Bundle not ready" }` — Job hasn't completed yet.
-
-**Response** `410` — `{ "error": "Download has expired" }` — Link expired after 48 hours.
+**Response** `400` — `{ "error": "Download not ready" }` — Job hasn't completed or archive is missing.
 
 **Response** `404` — `{ "error": "Job not found" }`
+
+---
+
+### Browse Bundle Catalog
+
+```
+GET /api/jobs/bundles
+```
+
+Public catalog of completed download bundles, sorted by popularity (most downloaded first). Useful for discovering and reusing existing bundles instead of creating duplicate jobs.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | number | `1` | Page number. |
+| `limit` | number | `20` | Results per page, max `50`. |
+
+**Response** `200`
+
+```json
+{
+  "bundles": [
+    {
+      "_id": "6651a...",
+      "filter": {
+        "p1ConnectCode": "AKLO#0"
+      },
+      "replayCount": 342,
+      "bundleSize": 10836352,
+      "downloadCount": 15,
+      "completedAt": "2024-06-01T12:05:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 47,
+    "pages": 3
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `filter` | object | The filter used to create this bundle. |
+| `replayCount` | number | Number of replays in the bundle. |
+| `bundleSize` | number | Compressed archive size in bytes. |
+| `downloadCount` | number | Number of times this bundle has been downloaded. |
+| `completedAt` | string | ISO 8601 timestamp when the bundle was created. |
 
 ---
 
@@ -502,206 +638,6 @@ GET /api/reference/stages
 
 ---
 
-## Submissions
-
-Community replay uploads. Files go through an airlock (staging area) before being reviewed and added to the main archive.
-
-### Upload Replays
-
-```
-POST /api/submissions/upload
-```
-
-Upload a `.slp` or `.zip` file containing replay(s). The request body should be the raw file bytes (not multipart form data).
-
-**Headers**
-
-| Header | Required | Description |
-|---|---|---|
-| `Content-Type` | Yes | `application/octet-stream` |
-| `x-filename` | Yes | Original filename (e.g. `replays.zip`). Must end in `.slp` or `.zip`. |
-| `x-submitted-by` | No | Who is submitting (connect code, name, etc). |
-
-**Response** `202`
-
-```json
-{
-  "uploadId": "6651a...",
-  "filename": "replays.zip",
-  "size": 1048576,
-  "status": "extracting"
-}
-```
-
-The upload is processed asynchronously. If a `.zip` is uploaded, individual `.slp` files are extracted and each becomes a separate submission. Poll the [upload status](#get-upload-status) to track processing.
-
----
-
-### List Uploads
-
-```
-GET /api/submissions/uploads
-```
-
-List the 100 most recent uploads, newest first.
-
-**Response** `200`
-
-```json
-[
-  {
-    "_id": "6651a...",
-    "originalFilename": "replays.zip",
-    "diskPath": "/data/airlock/a1b2c3-replays.zip",
-    "fileSize": 1048576,
-    "submittedBy": "AKLO#0",
-    "status": "done",
-    "slpCount": 12,
-    "error": null,
-    "createdAt": "2024-06-01T12:00:00.000Z",
-    "updatedAt": "2024-06-01T12:00:05.000Z"
-  }
-]
-```
-
-**Upload Status Values:** `uploading`, `extracting`, `done`, `failed`
-
----
-
-### Get Upload Status
-
-```
-GET /api/submissions/uploads/:id
-```
-
-Check the processing status of a specific upload.
-
-**Response** `200` — Single [Upload](#upload) object.
-
-**Response** `404` — `{ "error": "Upload not found" }`
-
----
-
-### List Submissions
-
-```
-GET /api/submissions
-```
-
-List individual replay submissions extracted from uploads.
-
-**Query Parameters**
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `status` | string | `pending` | Filter by status: `pending`, `approved`, `rejected`, or `all`. |
-| `uploadId` | string | — | Filter by upload ID. |
-| `page` | number | `1` | Page number. |
-| `limit` | number | `50` | Results per page (max 200). |
-
-**Response** `200`
-
-```json
-{
-  "submissions": [
-    {
-      "_id": "6651a...",
-      "uploadId": "6651b...",
-      "originalFilename": "Game_20240115T201532.slp",
-      "airlockPath": "/data/airlock/a1b2c3-Game_20240115T201532.slp",
-      "submittedBy": "AKLO#0",
-      "status": "pending",
-      "stageId": 31,
-      "stageName": "Battlefield",
-      "startAt": "2024-01-15T20:15:32.000Z",
-      "duration": 7200,
-      "players": [
-        {
-          "playerIndex": 0,
-          "connectCode": "AKLO#0",
-          "displayName": "Aklo",
-          "tag": null,
-          "characterId": 20,
-          "characterName": "Falco"
-        }
-      ],
-      "winner": 0,
-      "replayId": null,
-      "reviewedAt": null,
-      "createdAt": "2024-06-01T12:00:00.000Z",
-      "updatedAt": "2024-06-01T12:00:00.000Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 12,
-    "pages": 1
-  }
-}
-```
-
----
-
-### Get Submission
-
-```
-GET /api/submissions/:id
-```
-
-Get a single submission by ID.
-
-**Response** `200` — Single [Submission](#submission) object.
-
-**Response** `404` — `{ "error": "Submission not found" }`
-
----
-
-### Approve Submission
-
-```
-POST /api/submissions/:id/approve
-```
-
-Approve a pending submission. Moves the file from the airlock into the main archive and creates a replay record.
-
-**Response** `200`
-
-```json
-{
-  "status": "approved",
-  "replayId": "6651a..."
-}
-```
-
-**Response** `400` — `{ "error": "Submission already approved" }`
-
-**Response** `404` — `{ "error": "Submission not found" }`
-
----
-
-### Reject Submission
-
-```
-POST /api/submissions/:id/reject
-```
-
-Reject a pending submission and delete the file from the airlock.
-
-**Response** `200`
-
-```json
-{
-  "status": "rejected"
-}
-```
-
-**Response** `400` — `{ "error": "Submission already rejected" }`
-
-**Response** `404` — `{ "error": "Submission not found" }`
-
----
-
 ## Health Check
 
 ```
@@ -723,7 +659,6 @@ GET /health
 | Field | Type | Description |
 |---|---|---|
 | `_id` | string | Unique ID. |
-| `filePath` | string | Server-side file path. |
 | `fileHash` | string | File hash for deduplication. |
 | `fileSize` | number \| null | File size in bytes. |
 | `stageId` | number \| null | Stage ID (see [Reference Data](#get-stages)). |
@@ -757,9 +692,29 @@ GET /health
 
 ---
 
+## Resource Limits
+
+Job creation is subject to several safety limits to prevent runaway resource consumption:
+
+| Limit | Default | Env Var | Description |
+|---|---|---|---|
+| Concurrent jobs per client | 3 | `JOB_MAX_CONCURRENT_PER_CLIENT` | Active (non-terminal) jobs per `X-Client-Id`. |
+| Total pending queue | 50 | `JOB_MAX_PENDING_TOTAL` | Max pending jobs across all clients. |
+| Job timeout | 60 min | `JOB_TIMEOUT_MINUTES` | Jobs exceeding this are marked `failed`. |
+| slpz process timeout | 30 min | `SLPZ_TIMEOUT_MINUTES` | Compression subprocess timeout. |
+| Min free disk | 2,048 MB | `MIN_FREE_DISK_MB` | Jobs won't start if temp disk is below this threshold. |
+
+---
+
 ## Rate Limits
 
-No rate limits are currently enforced. Please be reasonable with request volume. This may change in the future.
+| Scope | Limit |
+|---|---|
+| Global | 100 requests per minute per IP |
+
+Rate limit headers (`RateLimit-Policy`, `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`) are included in responses.
+
+---
 
 ## CORS
 

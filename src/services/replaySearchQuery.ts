@@ -13,6 +13,8 @@ export interface ReplaySearchParams {
   stageId?: string;
   startDate?: string;
   endDate?: string;
+  maxFiles?: number;
+  maxSizeMb?: number;
 }
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

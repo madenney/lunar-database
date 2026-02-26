@@ -3,6 +3,8 @@ import path from "path";
 import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
 import { config } from "../config";
+import { sendError } from "../utils/sendError";
+import { applyReplayLimits } from "../utils/applyReplayLimits";
 
 const router = Router();
 
@@ -10,48 +12,68 @@ const router = Router();
 router.post("/estimate", async (req: Request, res: Response) => {
   try {
     const params: ReplaySearchParams = req.body;
+    const maxFiles = params.maxFiles != null ? Number(params.maxFiles) : undefined;
+    const maxSizeMb = params.maxSizeMb != null ? Number(params.maxSizeMb) : undefined;
 
-    // Require at least one filter
-    const hasFilter = !!(
-      params.p1CharacterId || params.p1ConnectCode || params.p1DisplayName ||
-      params.p2CharacterId || params.p2ConnectCode || params.p2DisplayName ||
-      params.stageId || params.startDate || params.endDate
-    );
-    if (!hasFilter) {
-      res.status(400).json({ error: "At least one filter is required" });
+    // Don't count maxFiles/maxSizeMb as filter fields
+    const filterKeys = Object.keys(params).filter((k) => k !== "maxFiles" && k !== "maxSizeMb");
+    if (filterKeys.length === 0) {
+      res.status(400).json({ error: "At least one filter field is required" });
       return;
     }
 
     const query = buildReplaySearchQuery(params);
+    const hasLimits = maxFiles != null || maxSizeMb != null;
 
-    const [count, sizeAgg] = await Promise.all([
-      Replay.countDocuments(query),
-      Replay.aggregate([
-        { $match: query },
-        { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-      ]),
-    ]);
+    let count: number;
+    let rawSize: number;
+    let totalDurationFrames: number;
 
-    const rawSize = sizeAgg[0]?.totalSize ?? 0;
-    const estimatedCompressedSize = Math.round(rawSize / 8);
+    if (hasLimits) {
+      // Fetch docs so we can apply limits
+      const docs = await Replay.find(query).select("fileSize duration").lean();
+      const limited = applyReplayLimits(docs, maxFiles, maxSizeMb);
+      count = limited.length;
+      rawSize = limited.reduce((sum, r) => sum + (r.fileSize ?? 0), 0);
+      totalDurationFrames = limited.reduce((sum, r) => sum + ((r as any).duration ?? 0), 0);
+    } else {
+      // Fast aggregate path
+      const [c, agg] = await Promise.all([
+        Replay.countDocuments(query),
+        Replay.aggregate([
+          { $match: query },
+          { $group: {
+            _id: null,
+            totalSize: { $sum: "$fileSize" },
+            totalDuration: { $sum: { $ifNull: ["$duration", 0] } },
+          }},
+        ]),
+      ]);
+      count = c;
+      rawSize = agg[0]?.totalSize ?? 0;
+      totalDurationFrames = agg[0]?.totalDuration ?? 0;
+    }
 
-    // ETA: compression time + upload time
+    const estimatedSlpzSize = Math.round(rawSize / 8);
+    const estimatedTarSize = estimatedSlpzSize + count * 1024;
+
+    // ETA: compression time + upload time (use tar size for upload estimate)
     const COMPRESS_RATE = 120; // files per second
     const uploadSpeedBytes = (config.estimateUploadSpeedMbps * 1024 * 1024) / 8; // Mbps → bytes/sec
     const compressTimeSec = count / COMPRESS_RATE;
-    const uploadTimeSec = estimatedCompressedSize / uploadSpeedBytes;
+    const uploadTimeSec = estimatedTarSize / uploadSpeedBytes;
     const estimatedTimeSec = Math.round(compressTimeSec + uploadTimeSec);
 
     res.json({
       replayCount: count,
       rawSize,
-      estimatedCompressedSize,
+      estimatedSlpzSize,
+      estimatedTarSize,
       estimatedTimeSec,
-      exceedsLimit: count > config.jobMaxReplays,
-      limit: config.jobMaxReplays,
+      totalDurationFrames,
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
@@ -89,11 +111,11 @@ router.get("/", async (req: Request, res: Response) => {
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.max(1, parseInt(limit as string, 10));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
-      Replay.find(finalQuery).sort(sortObj).skip(skip).limit(limitNum).lean(),
+      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).lean(),
       Replay.countDocuments(finalQuery),
     ]);
 
@@ -107,21 +129,21 @@ router.get("/", async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
 // GET /api/replays/:id
 router.get("/:id", async (req: Request, res: Response) => {
   try {
-    const replay = await Replay.findById(req.params.id).lean();
+    const replay = await Replay.findById(req.params.id).select("-filePath").lean();
     if (!replay) {
       res.status(404).json({ error: "Replay not found" });
       return;
     }
     res.json(replay);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
@@ -135,7 +157,7 @@ router.get("/:id/download", async (req: Request, res: Response) => {
     }
     res.download(replay.filePath, path.basename(replay.filePath));
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    sendError(res, err);
   }
 });
 
