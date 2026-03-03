@@ -14,7 +14,9 @@ import { sendError } from "../utils/sendError";
 const router = Router();
 
 // POST /api/submissions/upload — stream a .slp or .zip file to disk, then process
-router.post("/upload", requireAdmin, async (req: Request, res: Response) => {
+router.post("/upload", (req: Request, res: Response, next) => {
+  res.status(503).json({ error: "Uploads are temporarily disabled" });
+}, requireAdmin, async (req: Request, res: Response) => {
   try {
     const filename = req.headers["x-filename"] as string;
     if (!filename) {
@@ -45,12 +47,21 @@ router.post("/upload", requireAdmin, async (req: Request, res: Response) => {
     });
 
     // Stream request body directly to disk
+    const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500MB
     const writeStream = fs.createWriteStream(diskPath);
     let bytes = 0;
     let responded = false;
 
     req.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
+      if (bytes > MAX_UPLOAD_BYTES) {
+        writeStream.destroy();
+        req.destroy();
+        if (!responded) {
+          responded = true;
+          res.status(413).json({ error: "File too large (max 500MB)" });
+        }
+      }
     });
 
     req.pipe(writeStream);
@@ -128,7 +139,7 @@ router.get("/", requireAdmin, async (req: Request, res: Response) => {
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = (pageNum - 1) * limitNum;
+    const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const [submissions, total] = await Promise.all([
       Submission.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
@@ -179,7 +190,7 @@ router.post("/:id/approve", requireAdmin, async (req: Request, res: Response) =>
     try {
       fs.renameSync(submission.airlockPath, destPath);
     } catch (moveErr) {
-      res.status(500).json({ error: `Failed to move file: ${(moveErr as Error).message}` });
+      sendError(res, moveErr);
       return;
     }
 
@@ -207,7 +218,7 @@ router.post("/:id/approve", requireAdmin, async (req: Request, res: Response) =>
     } catch (dbErr) {
       // Move the file back to airlock so we don't lose it
       try { fs.renameSync(destPath, submission.airlockPath); } catch {}
-      res.status(500).json({ error: `Failed to create replay: ${(dbErr as Error).message}` });
+      sendError(res, dbErr);
       return;
     }
 

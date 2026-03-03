@@ -22,7 +22,7 @@ AdminSchema.methods.comparePassword = async function (candidate: string): Promis
 };
 
 export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, 10);
+  return bcrypt.hash(plain, 12);
 }
 
 export const Admin = mongoose.model<IAdmin>("Admin", AdminSchema);

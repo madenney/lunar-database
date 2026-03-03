@@ -6,6 +6,11 @@ import { Upload } from "./Upload";
 
 beforeAll(async () => {
   await mongoose.connect("mongodb://localhost:27017/lm-database-test");
+  // Ensure indexes are built so unique constraints work in tests
+  await Replay.syncIndexes();
+  await Job.syncIndexes();
+  await Submission.syncIndexes();
+  await Upload.syncIndexes();
 });
 
 afterAll(async () => {

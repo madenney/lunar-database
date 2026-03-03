@@ -1,17 +1,15 @@
+import path from "path";
 import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery } from "../services/replaySearchQuery";
 import { createBundle, cleanupJobTemp } from "../services/bundler";
 import { applyReplayLimits } from "../utils/applyReplayLimits";
+import { isCancelled } from "./utils";
 import { config } from "../config";
 
 let currentJobId: string | null = null;
 let running = false;
-
-async function isCancelled(jobId: string): Promise<boolean> {
-  const job = await Job.findById(jobId).select("status").lean();
-  return !job || job.status === "cancelled";
-}
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 export function isCompressorRunning(): boolean {
   return running;
@@ -45,7 +43,10 @@ export async function processNextCompression(): Promise<boolean> {
     const query = buildReplaySearchQuery(job.filter);
     const allReplays = await Replay.find(query).select("filePath fileSize").lean();
     const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
-    const filePaths = replays.map((r) => r.filePath);
+    const resolvedRoot = path.resolve(config.slpRootDir);
+    const filePaths = replays
+      .map((r) => r.filePath)
+      .filter((fp) => path.resolve(fp).startsWith(resolvedRoot + path.sep));
 
     if (filePaths.length === 0) {
       job.status = "failed";
@@ -136,10 +137,10 @@ export function startCompressor(intervalMs = 5000): void {
     if (!running) return;
     try {
       const hadWork = await processNextCompression();
-      setTimeout(tick, hadWork ? 0 : intervalMs);
+      if (running) timer = setTimeout(tick, hadWork ? 500 : intervalMs);
     } catch (err) {
       console.error("Compressor error:", (err as Error).message);
-      setTimeout(tick, intervalMs);
+      if (running) timer = setTimeout(tick, intervalMs);
     }
   };
 
@@ -148,5 +149,9 @@ export function startCompressor(intervalMs = 5000): void {
 
 export function stopCompressor(): void {
   running = false;
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
   console.log("Compressor worker stopped");
 }

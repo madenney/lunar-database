@@ -1,11 +1,10 @@
 import mongoose from "mongoose";
-import { config } from "../config";
 import { Replay } from "../models/Replay";
 import { Player } from "../models/Player";
+import { connectDb } from "../db";
 
 async function buildPlayers() {
-  await mongoose.connect(config.mongoUri);
-  console.log("Connected to MongoDB");
+  await connectDb();
 
   console.log("Aggregating players from replays...");
   const pipeline = [

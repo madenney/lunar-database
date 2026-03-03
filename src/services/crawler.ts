@@ -36,28 +36,34 @@ export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<
   let errors = 0;
   let batch: NonNullable<ReturnType<typeof parseOneFile>>[] = [];
 
+  // Collect file paths in chunks to batch dupe checks with $in instead of N+1 findOne
+  let pathBuffer: string[] = [];
+
   for (const filePath of walkDir(dir)) {
-    if (!skipDupeCheck) {
-      const existing = await Replay.findOne({ filePath });
-      if (existing) {
-        skipped++;
-        continue;
+    pathBuffer.push(filePath);
+
+    if (pathBuffer.length >= config.crawlerBatchSize) {
+      const result = await processPaths(pathBuffer, dir, skipDupeCheck, batch);
+      skipped += result.skipped;
+      errors += result.errors;
+      batch = result.batch;
+
+      if (batch.length >= config.crawlerBatchSize) {
+        await saveBatch(batch);
+        indexed += batch.length;
+        batch = [];
+        console.log(`Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
       }
+      pathBuffer = [];
     }
+  }
 
-    const result = parseOneFile(filePath, dir);
-    if (result) {
-      batch.push(result);
-    } else {
-      errors++;
-    }
-
-    if (batch.length >= config.crawlerBatchSize) {
-      await saveBatch(batch);
-      indexed += batch.length;
-      batch = [];
-      console.log(`Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
-    }
+  // Process remaining paths
+  if (pathBuffer.length > 0) {
+    const result = await processPaths(pathBuffer, dir, skipDupeCheck, batch);
+    skipped += result.skipped;
+    errors += result.errors;
+    batch = result.batch;
   }
 
   if (batch.length > 0) {
@@ -66,6 +72,37 @@ export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<
   }
 
   console.log(`Done. Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
+}
+
+async function processPaths(
+  paths: string[],
+  rootDir: string,
+  skipDupeCheck: boolean,
+  batch: NonNullable<ReturnType<typeof parseOneFile>>[]
+) {
+  let skipped = 0;
+  let errors = 0;
+  let toProcess = paths;
+
+  if (!skipDupeCheck) {
+    const existing = await Replay.find({ filePath: { $in: paths } })
+      .select("filePath")
+      .lean();
+    const existingSet = new Set(existing.map((r) => r.filePath));
+    skipped = existingSet.size;
+    toProcess = paths.filter((p) => !existingSet.has(p));
+  }
+
+  for (const filePath of toProcess) {
+    const result = parseOneFile(filePath, rootDir);
+    if (result) {
+      batch.push(result);
+    } else {
+      errors++;
+    }
+  }
+
+  return { batch, skipped, errors };
 }
 
 function parseOneFile(filePath: string, rootDir: string) {
@@ -96,9 +133,9 @@ async function saveBatch(batch: NonNullable<ReturnType<typeof parseOneFile>>[]) 
   try {
     await Replay.insertMany(batch, { ordered: false });
   } catch (err: any) {
-    // Ignore duplicate key errors (code 11000) from concurrent runs
+    // Duplicate key errors (code 11000) are expected from concurrent runs or re-crawls
     if (err.code !== 11000) {
-      console.error("Batch insert error:", err.message);
+      throw err;
     }
   }
 }

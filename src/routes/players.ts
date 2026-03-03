@@ -12,6 +12,10 @@ router.get("/autocomplete", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Query must be at least 1 character" });
       return;
     }
+    if ((q as string).length > 100) {
+      res.status(400).json({ error: "Query too long (max 100 characters)" });
+      return;
+    }
 
     const limitNum = Math.min(25, Math.max(1, parseInt(limit as string, 10)));
     const escaped = (q as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -40,6 +44,10 @@ router.get("/search", async (req: Request, res: Response) => {
     const { q, limit = "20" } = req.query;
     if (!q || (q as string).length < 2) {
       res.status(400).json({ error: "Query must be at least 2 characters" });
+      return;
+    }
+    if ((q as string).length > 100) {
+      res.status(400).json({ error: "Query too long (max 100 characters)" });
       return;
     }
 

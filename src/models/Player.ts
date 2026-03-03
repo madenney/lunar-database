@@ -14,7 +14,6 @@ const PlayerSchema = new Schema<IPlayer>({
   gameCount: { type: Number, default: 0 },
 });
 
-PlayerSchema.index({ connectCode: 1 });
 PlayerSchema.index({ displayName: 1 });
 PlayerSchema.index({ gameCount: -1 });
 

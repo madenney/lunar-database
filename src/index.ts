@@ -2,13 +2,14 @@ import fs from "fs";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import { config } from "./config";
+import { cfKeyGenerator, createRateLimiter } from "./utils/rateLimiter";
 import { connectDb } from "./db";
 import { Job } from "./models/Job";
 import { cleanupJobTemp, cleanupOrphanedTemp } from "./services/bundler";
 import { startCompressor, stopCompressor } from "./workers/compressWorker";
 import { startUploader, stopUploader } from "./workers/uploadWorker";
+import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
 import replayRoutes from "./routes/replays";
 import jobRoutes from "./routes/jobs";
 import statsRoutes from "./routes/stats";
@@ -57,6 +58,9 @@ async function main() {
 
   const app = express();
 
+  // Trust first proxy (Cloudflare Tunnel)
+  app.set("trust proxy", 1);
+
   // Security headers
   app.use(helmet());
 
@@ -64,25 +68,18 @@ async function main() {
     origin: [
       "https://lunarmelee.com",
       "https://www.lunarmelee.com",
-      ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000", "http://localhost:3001"] : []),
+      ...(process.env.NODE_ENV === "development" ? ["http://localhost:3000", "http://localhost:3001"] : []),
     ],
   }));
-  app.use(express.json());
+  app.use(express.json({ limit: "100kb" }));
 
   // Global rate limit: 100 requests per minute per IP
-  app.use(rateLimit({
-    windowMs: 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }));
+  app.use(createRateLimiter({ windowMs: 60 * 1000, max: 100 }));
 
   // Strict rate limit on login: 5 attempts per 15 minutes
-  app.use("/api/admin/login", rateLimit({
+  app.use("/api/admin/login", createRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
     message: { error: "Too many login attempts, please try again later" },
   }));
 
@@ -119,6 +116,7 @@ async function main() {
   // Start job workers
   startCompressor();
   startUploader();
+  startCleanupWorker();
 
   // Graceful shutdown
   let shuttingDown = false;
@@ -129,6 +127,7 @@ async function main() {
 
     stopCompressor();
     stopUploader();
+    stopCleanupWorker();
 
     server.close(() => {
       console.log("HTTP server closed");

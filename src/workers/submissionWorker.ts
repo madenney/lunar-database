@@ -38,9 +38,14 @@ async function extractZip(upload: InstanceType<typeof Upload>): Promise<number> 
   for (const entry of directory.files) {
     if (entry.type !== "File" || !entry.path.endsWith(".slp")) continue;
 
-    const unique = crypto.randomBytes(8).toString("hex");
+    // Guard against ZIP path traversal (e.g. entries containing "../../")
     const basename = path.basename(entry.path);
+    if (!basename || basename.startsWith(".")) continue;
+
+    const unique = crypto.randomBytes(8).toString("hex");
     const destPath = path.join(dir, `${unique}-${basename}`);
+    const resolved = path.resolve(destPath);
+    if (!resolved.startsWith(path.resolve(dir) + path.sep)) continue;
 
     try {
       await new Promise<void>((resolve, reject) => {

@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-export interface IPlayer {
+export interface IReplayPlayer {
   playerIndex: number;
   connectCode: string | null;
   displayName: string | null;
@@ -17,13 +17,13 @@ export interface IReplay extends Document {
   stageName: string | null;
   startAt: Date | null;
   duration: number | null; // frames
-  players: IPlayer[];
+  players: IReplayPlayer[];
   winner: number | null; // playerIndex of winner, null if inconclusive
   folderLabel: string | null; // loose label derived from folder path
   indexedAt: Date;
 }
 
-export const PlayerSchema = new Schema<IPlayer>(
+export const PlayerSchema = new Schema<IReplayPlayer>(
   {
     playerIndex: { type: Number, required: true },
     connectCode: { type: String, default: null },

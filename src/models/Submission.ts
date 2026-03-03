@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document } from "mongoose";
-import { IPlayer, PlayerSchema } from "./Replay";
+import { IReplayPlayer, PlayerSchema } from "./Replay";
 
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 
@@ -13,7 +13,7 @@ export interface ISubmission extends Document {
   stageName: string | null;
   startAt: Date | null;
   duration: number | null;
-  players: IPlayer[];
+  players: IReplayPlayer[];
   winner: number | null;
   replayId: mongoose.Types.ObjectId | null; // set after approval
   reviewedAt: Date | null;
@@ -45,5 +45,6 @@ const SubmissionSchema = new Schema<ISubmission>(
 );
 
 SubmissionSchema.index({ status: 1, createdAt: 1 });
+SubmissionSchema.index({ uploadId: 1, status: 1 });
 
 export const Submission = mongoose.model<ISubmission>("Submission", SubmissionSchema);

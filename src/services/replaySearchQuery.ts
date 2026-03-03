@@ -19,8 +19,8 @@ export interface ReplaySearchParams {
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function splitParam(v: string | undefined): string[] {
-  return v ? v.split(",").filter(Boolean) : [];
+function splitParam(v: string | undefined, max = 20): string[] {
+  return v ? v.split(",").filter(Boolean).slice(0, max) : [];
 }
 
 function buildPlayerMatch(charIds: string[], codes: string[], names: string[]): Record<string, any> {
@@ -89,8 +89,15 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
 
   if (params.startDate || params.endDate) {
     query.startAt = {};
-    if (params.startDate) query.startAt.$gte = new Date(params.startDate);
-    if (params.endDate) query.startAt.$lte = new Date(params.endDate);
+    if (params.startDate) {
+      const d = new Date(params.startDate);
+      if (!isNaN(d.getTime())) query.startAt.$gte = d;
+    }
+    if (params.endDate) {
+      const d = new Date(params.endDate);
+      if (!isNaN(d.getTime())) query.startAt.$lte = d;
+    }
+    if (Object.keys(query.startAt).length === 0) delete query.startAt;
   }
 
   return { $and: [notJunk, query] };

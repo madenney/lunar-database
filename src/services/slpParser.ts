@@ -1,13 +1,13 @@
 import { SlippiGame } from "@slippi/slippi-js/node";
 import { stages, characters } from "@slippi/slippi-js";
-import { IPlayer } from "../models/Replay";
+import { IReplayPlayer } from "../models/Replay";
 
 export interface ParsedReplay {
   stageId: number | null;
   stageName: string | null;
   startAt: Date | null;
   duration: number | null;
-  players: IPlayer[];
+  players: IReplayPlayer[];
   winner: number | null;
 }
 
@@ -28,7 +28,7 @@ export function parseSlpFile(filePath: string): ParsedReplay {
     }
   }
 
-  const players: IPlayer[] = (settings?.players ?? []).map((p) => {
+  const players: IReplayPlayer[] = (settings?.players ?? []).map((p) => {
     let characterName: string | null = null;
     if (p.characterId != null) {
       try {

@@ -26,15 +26,6 @@ async function getFreeDiskBytes(): Promise<number> {
   return parseInt(lines[lines.length - 1].trim(), 10);
 }
 
-/** Estimate disk space needed: raw copies + compressed tar headroom */
-function estimateDiskNeeded(filePaths: string[], avgFileSize: number): number {
-  // Need space for: copies (raw) + slpz output (~raw/8) + tar (~slpz + overhead)
-  // Peak usage is during copy phase before slpz --rm deletes originals
-  const rawBytes = filePaths.length * avgFileSize;
-  // Conservative: assume we need raw copies + final tar (slpz deletes originals, so peak is copies)
-  return rawBytes + rawBytes / 8 + filePaths.length * 1024;
-}
-
 /**
  * Creates a compressed bundle:
  * 1. Copy .slp files to a temp dir
@@ -61,10 +52,12 @@ export async function createBundle(
   const slpzTimeoutMs = config.slpzTimeoutMinutes * 60 * 1000;
 
   // Copy .slp files to temp dir (async to avoid blocking the event loop)
+  // Use index prefix to prevent filename collisions (e.g. two different game.slp)
   let copied = 0;
-  for (const fp of filePaths) {
+  for (let i = 0; i < filePaths.length; i++) {
+    const fp = filePaths[i];
     try {
-      await fsp.copyFile(fp, path.join(jobDir, path.basename(fp)));
+      await fsp.copyFile(fp, path.join(jobDir, `${i}_${path.basename(fp)}`));
       copied++;
       if (onProgress && copied % 100 === 0) {
         onProgress(copied, filePaths.length);
@@ -100,6 +93,7 @@ export async function createBundle(
   await execFileAsync("slpz", ["-r", "--rm", "-x", jobDir], {
     maxBuffer: 50 * 1024 * 1024,
     timeout: slpzTimeoutMs,
+    killSignal: "SIGKILL",
   });
 
   // Tar the .slpz files (should be fast, but cap at same timeout for safety)
@@ -107,6 +101,7 @@ export async function createBundle(
   await execFileAsync("tar", ["-cf", tarPath, "-C", jobDir, "."], {
     maxBuffer: 50 * 1024 * 1024,
     timeout: slpzTimeoutMs,
+    killSignal: "SIGKILL",
   });
 
   const stat = await fsp.stat(tarPath);
@@ -121,6 +116,10 @@ export async function createBundle(
  * Clean up temp directory and tar file for a job.
  */
 export function cleanupJobTemp(jobId: string): void {
+  if (!/^[a-f0-9]{24}$/.test(jobId)) {
+    console.error(`cleanupJobTemp: invalid jobId "${jobId}"`);
+    return;
+  }
   const jobDir = path.join(config.jobTempDir, jobId);
   const tarPath = path.join(config.jobTempDir, `${jobId}.tar`);
 
@@ -134,33 +133,6 @@ export function cleanupJobTemp(jobId: string): void {
   } catch (err) {
     console.error(`Failed to clean tar ${tarPath}:`, (err as Error).message);
   }
-}
-
-/**
- * Legacy cleanup for old zip bundles in bundlesDir.
- */
-export function cleanupOldBundles(): number {
-  if (!fs.existsSync(config.bundlesDir)) return 0;
-
-  const maxAge = config.bundleMaxAgeHours * 60 * 60 * 1000;
-  const now = Date.now();
-  let cleaned = 0;
-
-  const files = fs.readdirSync(config.bundlesDir);
-  for (const file of files) {
-    try {
-      const fp = path.join(config.bundlesDir, file);
-      const stat = fs.statSync(fp);
-      if (now - stat.mtimeMs > maxAge) {
-        fs.unlinkSync(fp);
-        cleaned++;
-      }
-    } catch (err) {
-      console.error(`Failed to clean up bundle ${file}:`, (err as Error).message);
-    }
-  }
-
-  return cleaned;
 }
 
 /**
@@ -214,7 +186,9 @@ export async function getTempDiskUsage(): Promise<{ usedBytes: number; freeBytes
         } else {
           usedBytes += stat.size;
         }
-      } catch {}
+      } catch (err) {
+        console.error(`Failed to stat temp entry ${item}:`, (err as Error).message);
+      }
     }
   }
 

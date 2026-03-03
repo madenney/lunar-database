@@ -1,11 +1,10 @@
 import fs from "fs";
 import mongoose from "mongoose";
-import { config } from "../config";
 import { Replay } from "../models/Replay";
+import { connectDb } from "../db";
 
 async function backfill() {
-  await mongoose.connect(config.mongoUri);
-  console.log("Connected to MongoDB");
+  await connectDb();
 
   const total = await Replay.countDocuments({ fileSize: null });
   console.log(`${total} replays to backfill`);

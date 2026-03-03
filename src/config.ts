@@ -15,6 +15,9 @@ export const config = {
   r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || "",
   r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
   r2BucketName: process.env.R2_BUCKET_NAME || "lm-replays",
+  get r2Configured(): boolean {
+    return !!(this.r2AccountId && this.r2AccessKeyId && this.r2SecretAccessKey);
+  },
 
   // Job settings
   jobBundleExpiryHours: parseInt(process.env.JOB_BUNDLE_EXPIRY_HOURS || "48", 10),
@@ -30,11 +33,14 @@ export const config = {
   // Estimate settings
   estimateUploadSpeedMbps: parseInt(process.env.ESTIMATE_UPLOAD_SPEED_MBPS || "10", 10),
 
+  // R2 cleanup
+  r2CleanupAfterDays: parseInt(process.env.R2_CLEANUP_AFTER_DAYS || "30", 10),
+  r2CleanupIntervalMinutes: parseInt(process.env.R2_CLEANUP_INTERVAL_MINUTES || "60", 10),
+
   // Auth
-  jwtSecret: (() => {
+  get jwtSecret(): string {
     if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
-    if (process.env.NODE_ENV === "test") return "test-secret";
     throw new Error("JWT_SECRET environment variable is required");
-  })(),
+  },
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "24h",
 };

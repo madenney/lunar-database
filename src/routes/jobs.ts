@@ -1,17 +1,14 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
-import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery } from "../services/replaySearchQuery";
 import { getPresignedDownloadUrl } from "../services/r2";
 import { sendError } from "../utils/sendError";
-import { applyReplayLimits } from "../utils/applyReplayLimits";
+import { createRateLimiter } from "../utils/rateLimiter";
 import { config } from "../config";
-
-const COMPRESS_RATE = 120; // files/sec
+import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 
 const router = Router();
 
-function parseFilter(body: Record<string, any>): IJobFilter {
+export function parseFilter(body: Record<string, any>): IJobFilter {
   const filter: IJobFilter = {};
   if (body.p1ConnectCode) filter.p1ConnectCode = String(body.p1ConnectCode);
   if (body.p1CharacterId != null) filter.p1CharacterId = String(body.p1CharacterId);
@@ -22,14 +19,34 @@ function parseFilter(body: Record<string, any>): IJobFilter {
   if (body.stageId != null) filter.stageId = String(body.stageId);
   if (body.startDate) filter.startDate = String(body.startDate);
   if (body.endDate) filter.endDate = String(body.endDate);
-  if (body.maxFiles != null) filter.maxFiles = Number(body.maxFiles);
-  if (body.maxSizeMb != null) filter.maxSizeMb = Number(body.maxSizeMb);
+  if (body.maxFiles != null) {
+    const n = Number(body.maxFiles);
+    if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.min(Math.floor(n), 50000);
+  }
+  if (body.maxSizeMb != null) {
+    const n = Number(body.maxSizeMb);
+    if (Number.isFinite(n) && n > 0) filter.maxSizeMb = Math.min(n, 10000);
+  }
   return filter;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const jobCreateLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: "Too many job creation requests, please try again later" },
+});
+
 // POST /api/jobs — create a download job
-router.post("/", async (req: Request, res: Response) => {
+router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
   try {
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    if (!clientId || !UUID_RE.test(clientId)) {
+      res.status(400).json({ error: "Valid X-Client-Id header (UUID) is required" });
+      return;
+    }
+
     const filter = parseFilter(req.body);
 
     const filterKeys = Object.keys(filter).filter((k) => k !== "maxFiles" && k !== "maxSizeMb");
@@ -38,35 +55,12 @@ router.post("/", async (req: Request, res: Response) => {
       return;
     }
 
-    const query = buildReplaySearchQuery(filter);
-    const hasLimits = filter.maxFiles != null || filter.maxSizeMb != null;
-
-    let count: number;
-    let rawSize: number;
-
-    if (hasLimits) {
-      const docs = await Replay.find(query).select("fileSize").lean();
-      const limited = applyReplayLimits(docs, filter.maxFiles, filter.maxSizeMb);
-      count = limited.length;
-      rawSize = limited.reduce((sum, r) => sum + (r.fileSize ?? 0), 0);
-    } else {
-      const [c, sizeAgg] = await Promise.all([
-        Replay.countDocuments(query),
-        Replay.aggregate([
-          { $match: query },
-          { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-        ]),
-      ]);
-      count = c;
-      rawSize = sizeAgg[0]?.totalSize ?? 0;
-    }
+    const { count, rawSize } = await queryCountAndSize(filter);
 
     if (count === 0) {
       res.status(400).json({ error: "No replays match this filter" });
       return;
     }
-
-    const clientId = req.headers["x-client-id"] as string | undefined;
 
     // Per-client concurrent job limit (non-terminal jobs)
     if (clientId) {
@@ -85,23 +79,20 @@ router.post("/", async (req: Request, res: Response) => {
     // Global queue depth limit
     const pendingCount = await Job.countDocuments({ status: "pending" });
     if (pendingCount >= config.jobMaxPendingTotal) {
-      res.status(503).json({
+      res.status(429).json({
         error: `Job queue is full (${pendingCount} pending). Try again later.`,
       });
       return;
     }
 
-    const estimatedTarSize = Math.round(rawSize / 8) + count * 1024;
-    const compressTimeSec = count / COMPRESS_RATE;
-    const uploadTimeSec = estimatedTarSize / (config.estimateUploadSpeedMbps * 125000);
-    const estimatedProcessingTime = Math.round(compressTimeSec + uploadTimeSec);
+    const estimates = calculateEstimates(count, rawSize);
 
     const job = await Job.create({
       filter,
       createdBy: clientId || null,
       replayCount: count,
       estimatedSize: rawSize,
-      estimatedProcessingTime,
+      estimatedProcessingTime: estimates.estimatedProcessingTimeSec,
     });
 
     res.status(201).json({ jobId: job._id, status: job.status });
@@ -122,7 +113,7 @@ router.get("/", async (req: Request, res: Response) => {
     const { page = "1", limit = "20" } = req.query;
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
-    const skip = (pageNum - 1) * limitNum;
+    const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const query = { createdBy: clientId };
     const [jobs, total] = await Promise.all([
@@ -130,7 +121,7 @@ router.get("/", async (req: Request, res: Response) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .select("status filter replayCount bundleSize r2Key progress error createdAt completedAt")
+        .select("status filter replayCount bundleSize r2Key progress error createdAt completedAt lastDownloadedAt")
         .lean(),
       Job.countDocuments(query),
     ]);
@@ -155,7 +146,7 @@ router.get("/bundles", async (req: Request, res: Response) => {
     const { page = "1", limit = "20" } = req.query;
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10)));
-    const skip = (pageNum - 1) * limitNum;
+    const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const query = { status: "completed", r2Key: { $ne: null } };
     const [bundles, total] = await Promise.all([
@@ -163,7 +154,7 @@ router.get("/bundles", async (req: Request, res: Response) => {
         .sort({ downloadCount: -1, completedAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .select("filter replayCount bundleSize downloadCount completedAt")
+        .select("filter replayCount bundleSize downloadCount completedAt lastDownloadedAt")
         .lean(),
       Job.countDocuments(query),
     ]);
@@ -218,6 +209,17 @@ router.get("/:id", async (req: Request, res: Response) => {
     const job = await Job.findById(req.params.id);
     if (!job) {
       res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    // Ownership check — non-owners get limited info only
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    if (job.createdBy && job.createdBy !== clientId) {
+      res.json({
+        jobId: job._id,
+        status: job.status,
+        downloadReady: job.status === "completed" && !!job.r2Key,
+      });
       return;
     }
 
@@ -295,6 +297,7 @@ router.get("/:id", async (req: Request, res: Response) => {
       queuePosition,
       estimatedWaitSec,
       estimatedProcessingTimeSec,
+      lastDownloadedAt: job.lastDownloadedAt,
       startedAt: job.startedAt,
       createdAt: job.createdAt,
       completedAt: job.completedAt,
@@ -313,17 +316,24 @@ router.get("/:id/download", async (req: Request, res: Response) => {
       return;
     }
 
+    // Ownership check — only the job creator can download
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    if (job.createdBy && job.createdBy !== clientId) {
+      res.status(403).json({ error: "Not authorized to download this job" });
+      return;
+    }
+
     if (job.status !== "completed" || !job.r2Key) {
       res.status(400).json({ error: "Download not ready" });
       return;
     }
 
-    // Increment download counter
-    Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 } }).exec();
+    // Increment download counter and update last download timestamp
+    Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec().catch(() => {});
 
     // Generate a fresh 1-hour presigned URL on each request
     const url = await getPresignedDownloadUrl(job.r2Key, 3600);
-    res.redirect(url);
+    res.json({ url, expiresIn: 3600 });
   } catch (err) {
     sendError(res, err);
   }

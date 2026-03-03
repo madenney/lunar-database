@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { config } from "../config";
 import { Admin } from "../models/Admin";
@@ -9,12 +10,15 @@ import { requireAdmin } from "../middleware/auth";
 import { sendError } from "../utils/sendError";
 import { startCompressor, stopCompressor, isCompressorRunning, getCompressorJobId } from "../workers/compressWorker";
 import { startUploader, stopUploader, isUploaderRunning, getUploaderJobId } from "../workers/uploadWorker";
+import { startCleanupWorker, stopCleanupWorker, isCleanupRunning } from "../workers/cleanupWorker";
+import { cleanupStaleR2Objects } from "../services/r2Cleanup";
 import { deleteFromR2 } from "../services/r2";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
-import { buildReplaySearchQuery } from "../services/replaySearchQuery";
-import { applyReplayLimits } from "../utils/applyReplayLimits";
+import { parseFilter } from "./jobs";
+import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 
-const COMPRESS_RATE = 120; // files/sec
+// Pre-computed dummy hash for timing-safe login comparison
+const DUMMY_HASH = bcrypt.hashSync("dummy-timing-safe-value", 12);
 
 const VALID_JOB_STATUSES: JobStatus[] = [
   "pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled",
@@ -32,7 +36,13 @@ router.post("/login", async (req: Request, res: Response) => {
     }
 
     const admin = await Admin.findOne({ username });
-    if (!admin || !(await admin.comparePassword(password))) {
+    if (!admin) {
+      // Run bcrypt.compare against dummy hash so response time is constant
+      await bcrypt.compare(password, DUMMY_HASH);
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+    if (!(await admin.comparePassword(password))) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
@@ -51,6 +61,14 @@ router.post("/login", async (req: Request, res: Response) => {
 
 // All routes below require admin auth
 router.use(requireAdmin);
+
+// Audit logging for admin mutations
+router.use((req: Request, _res: Response, next) => {
+  if (req.method !== "GET") {
+    console.log(`[ADMIN] ${req.admin?.username} ${req.method} ${req.path}`);
+  }
+  next();
+});
 
 // GET /api/admin/status — system health, worker state, DB stats, disk usage
 router.get("/status", async (_req: Request, res: Response) => {
@@ -75,6 +93,11 @@ router.get("/status", async (_req: Request, res: Response) => {
       uploader: {
         running: isUploaderRunning(),
         currentJobId: getUploaderJobId(),
+      },
+      cleanup: {
+        running: isCleanupRunning(),
+        maxAgeDays: config.r2CleanupAfterDays,
+        intervalMinutes: config.r2CleanupIntervalMinutes,
       },
       replays: replayCount,
       jobs,
@@ -140,6 +163,26 @@ router.post("/worker/uploader/stop", (_req: Request, res: Response) => {
   res.json({ message: "Uploader stopped" });
 });
 
+// POST /api/admin/worker/cleanup/start
+router.post("/worker/cleanup/start", (_req: Request, res: Response) => {
+  if (isCleanupRunning()) {
+    res.json({ message: "Cleanup worker already running" });
+    return;
+  }
+  startCleanupWorker();
+  res.json({ message: "Cleanup worker started" });
+});
+
+// POST /api/admin/worker/cleanup/stop
+router.post("/worker/cleanup/stop", (_req: Request, res: Response) => {
+  if (!isCleanupRunning()) {
+    res.json({ message: "Cleanup worker already stopped" });
+    return;
+  }
+  stopCleanupWorker();
+  res.json({ message: "Cleanup worker stopped" });
+});
+
 // GET /api/admin/worker/status
 router.get("/worker/status", (_req: Request, res: Response) => {
   res.json({
@@ -150,6 +193,11 @@ router.get("/worker/status", (_req: Request, res: Response) => {
     uploader: {
       running: isUploaderRunning(),
       currentJobId: getUploaderJobId(),
+    },
+    cleanup: {
+      running: isCleanupRunning(),
+      maxAgeDays: config.r2CleanupAfterDays,
+      intervalMinutes: config.r2CleanupIntervalMinutes,
     },
   });
 });
@@ -164,20 +212,27 @@ router.get("/jobs", async (req: Request, res: Response) => {
     if (createdBy) query.createdBy = String(createdBy);
     if (startDate || endDate) {
       query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate as string);
-      if (endDate) query.createdAt.$lte = new Date(endDate as string);
+      if (startDate) {
+        const d = new Date(startDate as string);
+        if (!isNaN(d.getTime())) query.createdAt.$gte = d;
+      }
+      if (endDate) {
+        const d = new Date(endDate as string);
+        if (!isNaN(d.getTime())) query.createdAt.$lte = d;
+      }
+      if (Object.keys(query.createdAt).length === 0) delete query.createdAt;
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = (pageNum - 1) * limitNum;
+    const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
-    const sort = query.status === "pending"
+    const sort: Record<string, 1 | -1> = query.status === "pending"
       ? { priority: 1, createdAt: 1 }
       : { createdAt: -1 };
 
     const [jobs, total] = await Promise.all([
-      Job.find(query).sort(sort as any).skip(skip).limit(limitNum).lean(),
+      Job.find(query).sort(sort).skip(skip).limit(limitNum).select("-replayIds").lean(),
       Job.countDocuments(query),
     ]);
 
@@ -210,6 +265,10 @@ router.put("/jobs/reorder", async (req: Request, res: Response) => {
     const { jobIds } = req.body;
     if (!Array.isArray(jobIds) || jobIds.length === 0) {
       res.status(400).json({ error: "jobIds must be a non-empty array" });
+      return;
+    }
+    if (jobIds.length > 200) {
+      res.status(400).json({ error: "jobIds array exceeds maximum of 200" });
       return;
     }
 
@@ -270,7 +329,7 @@ router.patch("/jobs/:id", async (req: Request, res: Response) => {
         res.status(400).json({ error: "Can only edit filter on pending jobs" });
         return;
       }
-      job.filter = filter;
+      job.filter = parseFilter(filter);
     }
 
     if (priority != null) {
@@ -321,11 +380,15 @@ router.delete("/jobs/:id", async (req: Request, res: Response) => {
     // Clean up local temp files
     cleanupJobTemp(job._id.toString());
 
-    job.status = "cancelled";
-    job.progress = null;
-    await job.save();
-
-    res.json({ message: "Job cancelled and cleaned up" });
+    if (req.query.purge === "true") {
+      await job.deleteOne();
+      res.json({ message: "Job deleted" });
+    } else {
+      job.status = "cancelled";
+      job.progress = null;
+      await job.save();
+      res.json({ message: "Job cancelled and cleaned up" });
+    }
   } catch (err) {
     sendError(res, err);
   }
@@ -346,32 +409,8 @@ router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
     }
 
     // Re-estimate count and size
-    const query = buildReplaySearchQuery(job.filter);
-    const hasLimits = job.filter.maxFiles != null || job.filter.maxSizeMb != null;
-
-    let count: number;
-    let rawSize: number;
-
-    if (hasLimits) {
-      const docs = await Replay.find(query).select("fileSize").lean();
-      const limited = applyReplayLimits(docs, job.filter.maxFiles, job.filter.maxSizeMb);
-      count = limited.length;
-      rawSize = limited.reduce((sum, r) => sum + (r.fileSize ?? 0), 0);
-    } else {
-      const [c, sizeAgg] = await Promise.all([
-        Replay.countDocuments(query),
-        Replay.aggregate([
-          { $match: query },
-          { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-        ]),
-      ]);
-      count = c;
-      rawSize = sizeAgg[0]?.totalSize ?? 0;
-    }
-
-    const estimatedTarSize = Math.round(rawSize / 8) + count * 1024;
-    const compressTimeSec = count / COMPRESS_RATE;
-    const uploadTimeSec = estimatedTarSize / (config.estimateUploadSpeedMbps * 125000);
+    const { count, rawSize } = await queryCountAndSize(job.filter);
+    const estimates = calculateEstimates(count, rawSize);
 
     job.status = "pending";
     job.error = null;
@@ -383,7 +422,7 @@ router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
     job.replayIds = [];
     job.replayCount = count;
     job.estimatedSize = rawSize;
-    job.estimatedProcessingTime = Math.round(compressTimeSec + uploadTimeSec);
+    job.estimatedProcessingTime = estimates.estimatedProcessingTimeSec;
     job.completedAt = null;
     await job.save();
 
@@ -393,10 +432,30 @@ router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/admin/r2/cleanup — on-demand R2 stale object cleanup
+router.post("/r2/cleanup", async (req: Request, res: Response) => {
+  try {
+    const rawDays = Number(req.body.maxAgeDays ?? config.r2CleanupAfterDays);
+    const maxAgeDays = Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : config.r2CleanupAfterDays;
+    const dryRun = !!req.body.dryRun;
+
+    const result = await cleanupStaleR2Objects(maxAgeDays, dryRun);
+    res.json({
+      dryRun,
+      maxAgeDays,
+      ...result,
+      freedMb: Math.round(result.freedBytes / (1024 * 1024)),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // POST /api/admin/temp/cleanup — clean orphaned temp files
 router.post("/temp/cleanup", async (req: Request, res: Response) => {
   try {
-    const maxAgeHours = req.body.maxAgeHours ?? 24;
+    const rawHours = Number(req.body.maxAgeHours ?? 24);
+    const maxAgeHours = Number.isFinite(rawHours) && rawHours >= 1 ? rawHours : 24;
     const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
     const cleaned = await cleanupOrphanedTemp(maxAgeMs);
     const disk = await getTempDiskUsage();

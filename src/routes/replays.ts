@@ -4,7 +4,8 @@ import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
 import { config } from "../config";
 import { sendError } from "../utils/sendError";
-import { applyReplayLimits } from "../utils/applyReplayLimits";
+import { createRateLimiter } from "../utils/rateLimiter";
+import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 
 const router = Router();
 
@@ -12,8 +13,6 @@ const router = Router();
 router.post("/estimate", async (req: Request, res: Response) => {
   try {
     const params: ReplaySearchParams = req.body;
-    const maxFiles = params.maxFiles != null ? Number(params.maxFiles) : undefined;
-    const maxSizeMb = params.maxSizeMb != null ? Number(params.maxSizeMb) : undefined;
 
     // Don't count maxFiles/maxSizeMb as filter fields
     const filterKeys = Object.keys(params).filter((k) => k !== "maxFiles" && k !== "maxSizeMb");
@@ -22,54 +21,15 @@ router.post("/estimate", async (req: Request, res: Response) => {
       return;
     }
 
-    const query = buildReplaySearchQuery(params);
-    const hasLimits = maxFiles != null || maxSizeMb != null;
-
-    let count: number;
-    let rawSize: number;
-    let totalDurationFrames: number;
-
-    if (hasLimits) {
-      // Fetch docs so we can apply limits
-      const docs = await Replay.find(query).select("fileSize duration").lean();
-      const limited = applyReplayLimits(docs, maxFiles, maxSizeMb);
-      count = limited.length;
-      rawSize = limited.reduce((sum, r) => sum + (r.fileSize ?? 0), 0);
-      totalDurationFrames = limited.reduce((sum, r) => sum + ((r as any).duration ?? 0), 0);
-    } else {
-      // Fast aggregate path
-      const [c, agg] = await Promise.all([
-        Replay.countDocuments(query),
-        Replay.aggregate([
-          { $match: query },
-          { $group: {
-            _id: null,
-            totalSize: { $sum: "$fileSize" },
-            totalDuration: { $sum: { $ifNull: ["$duration", 0] } },
-          }},
-        ]),
-      ]);
-      count = c;
-      rawSize = agg[0]?.totalSize ?? 0;
-      totalDurationFrames = agg[0]?.totalDuration ?? 0;
-    }
-
-    const estimatedSlpzSize = Math.round(rawSize / 8);
-    const estimatedTarSize = estimatedSlpzSize + count * 1024;
-
-    // ETA: compression time + upload time (use tar size for upload estimate)
-    const COMPRESS_RATE = 120; // files per second
-    const uploadSpeedBytes = (config.estimateUploadSpeedMbps * 1024 * 1024) / 8; // Mbps → bytes/sec
-    const compressTimeSec = count / COMPRESS_RATE;
-    const uploadTimeSec = estimatedTarSize / uploadSpeedBytes;
-    const estimatedTimeSec = Math.round(compressTimeSec + uploadTimeSec);
+    const { count, rawSize, totalDurationFrames } = await queryCountAndSize(params, { includeDuration: true });
+    const estimates = calculateEstimates(count, rawSize);
 
     res.json({
       replayCount: count,
       rawSize,
-      estimatedSlpzSize,
-      estimatedTarSize,
-      estimatedTimeSec,
+      estimatedSlpzSize: Math.round(rawSize / 8),
+      estimatedTarSize: estimates.estimatedTarSize,
+      estimatedTimeSec: estimates.estimatedProcessingTimeSec,
       totalDurationFrames,
     });
   } catch (err) {
@@ -112,7 +72,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = (pageNum - 1) * limitNum;
+    const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const [replays, total] = await Promise.all([
       Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).lean(),
@@ -147,15 +107,26 @@ router.get("/:id", async (req: Request, res: Response) => {
   }
 });
 
+const downloadLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Too many download requests, please try again later" },
+});
+
 // GET /api/replays/:id/download — serve the .slp file directly
-router.get("/:id/download", async (req: Request, res: Response) => {
+router.get("/:id/download", downloadLimiter, async (req: Request, res: Response) => {
   try {
     const replay = await Replay.findById(req.params.id).lean();
     if (!replay) {
       res.status(404).json({ error: "Replay not found" });
       return;
     }
-    res.download(replay.filePath, path.basename(replay.filePath));
+    const resolved = path.resolve(replay.filePath);
+    if (!resolved.startsWith(path.resolve(config.slpRootDir))) {
+      res.status(403).json({ error: "File path outside allowed directory" });
+      return;
+    }
+    res.download(resolved, path.basename(resolved));
   } catch (err) {
     sendError(res, err);
   }

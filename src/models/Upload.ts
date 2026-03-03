@@ -31,4 +31,6 @@ const UploadSchema = new Schema<IUpload>(
   { timestamps: true }
 );
 
+UploadSchema.index({ status: 1, createdAt: -1 });
+
 export const Upload = mongoose.model<IUpload>("Upload", UploadSchema);

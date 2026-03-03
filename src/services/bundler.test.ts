@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { createBundle, cleanupJobTemp, cleanupOldBundles } from "./bundler";
+import { createBundle, cleanupJobTemp } from "./bundler";
 
 // Override config for tests
 jest.mock("../config", () => ({
@@ -72,33 +72,33 @@ describe("bundler", () => {
   describe("createBundle", () => {
     it("creates a tar file from a list of .slp paths", async () => {
       const fixture = path.join(__dirname, "../__fixtures__/test.slp");
-      const result = await createBundle([fixture], "test-job-1");
+      const result = await createBundle([fixture], "aaaaaaaaaaaaaaaaaaaaaaaa");
 
-      expect(result.tarPath).toMatch(/test-job-1\.tar$/);
+      expect(result.tarPath).toMatch(/aaaaaaaaaaaaaaaaaaaaaaaa\.tar$/);
       expect(result.size).toBeGreaterThan(0);
       expect(fs.existsSync(result.tarPath)).toBe(true);
 
       // Clean up
-      cleanupJobTemp("test-job-1");
+      cleanupJobTemp("aaaaaaaaaaaaaaaaaaaaaaaa");
     });
 
     it("calls progress callback during copy", async () => {
       const fixture = path.join(__dirname, "../__fixtures__/test.slp");
       const progress = jest.fn();
 
-      await createBundle([fixture], "test-job-progress", progress);
+      await createBundle([fixture], "bbbbbbbbbbbbbbbbbbbbbbbb", progress);
       // Should be called at least once (final call after all copies)
       expect(progress).toHaveBeenCalled();
       const lastCall = progress.mock.calls[progress.mock.calls.length - 1];
       expect(lastCall[0]).toBe(1); // 1 file processed
       expect(lastCall[1]).toBe(1); // 1 file total
 
-      cleanupJobTemp("test-job-progress");
+      cleanupJobTemp("bbbbbbbbbbbbbbbbbbbbbbbb");
     });
 
     it("throws when no files exist", async () => {
       await expect(
-        createBundle(["/tmp/nope-does-not-exist.slp"], "test-job-empty")
+        createBundle(["/tmp/nope-does-not-exist.slp"], "cccccccccccccccccccccccc")
       ).rejects.toThrow("No files were copied for bundling");
     });
   });
@@ -106,28 +106,17 @@ describe("bundler", () => {
   describe("cleanupJobTemp", () => {
     it("cleans up job directory and tar file", async () => {
       const fixture = path.join(__dirname, "../__fixtures__/test.slp");
-      const result = await createBundle([fixture], "test-job-cleanup");
+      const result = await createBundle([fixture], "dddddddddddddddddddddddd");
 
       expect(fs.existsSync(result.tarPath)).toBe(true);
 
-      cleanupJobTemp("test-job-cleanup");
+      cleanupJobTemp("dddddddddddddddddddddddd");
       expect(fs.existsSync(result.tarPath)).toBe(false);
     });
 
     it("does not throw for non-existent job", () => {
-      expect(() => cleanupJobTemp("nonexistent-job")).not.toThrow();
+      expect(() => cleanupJobTemp("eeeeeeeeeeeeeeeeeeeeeeee")).not.toThrow();
     });
   });
 
-  describe("cleanupOldBundles", () => {
-    it("returns 0 when bundles dir doesn't exist", () => {
-      const origDir = config.bundlesDir;
-      config.bundlesDir = "/tmp/lm-nonexistent-dir-" + process.pid;
-
-      const cleaned = cleanupOldBundles();
-      expect(cleaned).toBe(0);
-
-      config.bundlesDir = origDir;
-    });
-  });
 });

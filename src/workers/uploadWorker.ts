@@ -1,14 +1,13 @@
+import path from "path";
 import { Job } from "../models/Job";
 import { uploadToR2, deleteFromR2 } from "../services/r2";
 import { cleanupJobTemp } from "../services/bundler";
+import { isCancelled } from "./utils";
+import { config } from "../config";
 
 let currentJobId: string | null = null;
 let running = false;
-
-async function isCancelled(jobId: string): Promise<boolean> {
-  const job = await Job.findById(jobId).select("status").lean();
-  return !job || job.status === "cancelled";
-}
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 export function isUploaderRunning(): boolean {
   return running;
@@ -29,14 +28,41 @@ export async function processNextUpload(): Promise<boolean> {
 
   const jobId = job._id.toString();
   currentJobId = jobId;
+  const jobStartTime = Date.now();
+  const jobTimeoutMs = config.jobTimeoutMinutes * 60 * 1000;
 
   try {
+    if (!job.bundlePath) {
+      throw new Error("Job has no bundlePath");
+    }
+
+    const resolvedBundle = path.resolve(job.bundlePath);
+    const resolvedTempDir = path.resolve(config.jobTempDir);
+    if (!resolvedBundle.startsWith(resolvedTempDir + path.sep)) {
+      throw new Error("bundlePath is outside jobTempDir");
+    }
+
     // Uploading step
-    job.progress = { step: "uploading", filesProcessed: 0, filesTotal: 1 };
+    const totalBytes = job.bundleSize ?? 0;
+    job.progress = { step: "uploading", filesProcessed: 0, filesTotal: 1, bytesUploaded: 0, bytesTotal: totalBytes };
     await job.save();
 
     const r2Key = `jobs/${jobId}.tar`;
-    await uploadToR2(job.bundlePath!, r2Key);
+    let lastReportedPct = 0;
+    await uploadToR2(job.bundlePath, r2Key, (loaded, total) => {
+      const pct = total > 0 ? Math.floor((loaded / total) * 100) : 0;
+      if (pct >= lastReportedPct + 1) {
+        lastReportedPct = pct;
+        Job.updateOne(
+          { _id: jobId },
+          { "progress.bytesUploaded": loaded, "progress.bytesTotal": total }
+        ).catch(() => {});
+      }
+    });
+
+    if (Date.now() - jobStartTime > jobTimeoutMs) {
+      throw new Error(`Job timed out after ${config.jobTimeoutMinutes} minutes (during upload)`);
+    }
 
     // Cancellation checkpoint: after upload
     if (await isCancelled(jobId)) {
@@ -92,10 +118,10 @@ export function startUploader(intervalMs = 5000): void {
     if (!running) return;
     try {
       const hadWork = await processNextUpload();
-      setTimeout(tick, hadWork ? 0 : intervalMs);
+      if (running) timer = setTimeout(tick, hadWork ? 500 : intervalMs);
     } catch (err) {
       console.error("Uploader error:", (err as Error).message);
-      setTimeout(tick, intervalMs);
+      if (running) timer = setTimeout(tick, intervalMs);
     }
   };
 
@@ -104,5 +130,9 @@ export function startUploader(intervalMs = 5000): void {
 
 export function stopUploader(): void {
   running = false;
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
   console.log("Uploader worker stopped");
 }

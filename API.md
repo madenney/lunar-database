@@ -377,6 +377,8 @@ Check the status and progress of a download job. Poll this endpoint to track the
 
 **Response** `200`
 
+Compressing example:
+
 ```json
 {
   "jobId": "6651a...",
@@ -401,6 +403,34 @@ Check the status and progress of a download job. Poll this endpoint to track the
 }
 ```
 
+Uploading example (with byte-level progress):
+
+```json
+{
+  "jobId": "6651a...",
+  "status": "uploading",
+  "replayCount": 342,
+  "estimatedSize": 83886080,
+  "bundleSize": 10836352,
+  "downloadReady": false,
+  "downloadCount": 0,
+  "progress": {
+    "step": "uploading",
+    "filesProcessed": 0,
+    "filesTotal": 1,
+    "bytesUploaded": 5242880,
+    "bytesTotal": 10836352
+  },
+  "error": null,
+  "queuePosition": 0,
+  "estimatedWaitSec": 0,
+  "estimatedProcessingTimeSec": 12,
+  "startedAt": "2024-06-01T12:00:05.000Z",
+  "createdAt": "2024-06-01T12:00:00.000Z",
+  "completedAt": null
+}
+```
+
 **Job Status Lifecycle**
 
 | Status | Description |
@@ -409,7 +439,7 @@ Check the status and progress of a download job. Poll this endpoint to track the
 | `processing` | Compressor has claimed the job and is querying replays. |
 | `compressing` | Compressing .slp files with slpz. `progress` is updated during this step. |
 | `compressed` | Compression complete, waiting for the uploader to pick it up. |
-| `uploading` | Uploading compressed archive to CDN. |
+| `uploading` | Uploading compressed archive to CDN. `progress.bytesUploaded` / `progress.bytesTotal` track byte-level upload progress (updated every ~1%). |
 | `completed` | Done. `downloadReady` is `true`. |
 | `failed` | Something went wrong. See `error` field. |
 | `cancelled` | Job was cancelled by the user or an admin. |
@@ -425,7 +455,7 @@ Check the status and progress of a download job. Poll this endpoint to track the
 | `bundleSize` | number \| null | Final compressed archive size in bytes. Set when completed. |
 | `downloadReady` | boolean | `true` when the job is completed and the archive is available. |
 | `downloadCount` | number | Number of times this bundle has been downloaded. |
-| `progress` | object \| null | `{ step, filesProcessed, filesTotal }` during compressing/uploading. |
+| `progress` | object \| null | Progress during `compressing` and `uploading` steps, null otherwise. See [Progress Object](#progress-object) below. |
 | `error` | string \| null | Error message if failed. |
 | `queuePosition` | number \| null | 1-based position in queue (1 = next up). `0` = currently processing. `null` for terminal statuses. |
 | `estimatedWaitSec` | number \| null | Estimated seconds until the job starts processing. Includes remaining time of active job. `null` for terminal statuses. |
@@ -433,6 +463,28 @@ Check the status and progress of a download job. Poll this endpoint to track the
 | `startedAt` | string \| null | ISO 8601 timestamp when the worker started processing. `null` while pending. |
 | `createdAt` | string | ISO 8601 timestamp. |
 | `completedAt` | string \| null | ISO 8601 timestamp when the job finished. |
+
+#### Progress Object
+
+The `progress` field is non-null during `compressing` and `uploading` steps, null otherwise.
+
+| Field | Type | Present | Description |
+|---|---|---|---|
+| `step` | string | always | `"compressing"` or `"uploading"`. |
+| `filesProcessed` | number | always | Files compressed so far (compressing), or `0` (uploading). |
+| `filesTotal` | number | always | Total files to compress (compressing), or `1` (uploading). |
+| `bytesUploaded` | number | uploading | Bytes uploaded to CDN so far. Updated every ~1% of total. |
+| `bytesTotal` | number | uploading | Total bytes to upload (equals `bundleSize`). |
+
+During `compressing`, use `filesProcessed / filesTotal` for the progress bar. During `uploading`, use `bytesUploaded / bytesTotal`:
+
+```ts
+if (progress.step === "compressing") {
+  percent = progress.filesProcessed / progress.filesTotal;
+} else if (progress.step === "uploading") {
+  percent = progress.bytesUploaded / progress.bytesTotal;
+}
+```
 
 **Response** `404` — `{ "error": "Job not found" }`
 

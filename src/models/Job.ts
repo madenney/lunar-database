@@ -28,6 +28,8 @@ export interface IJobProgress {
   step: string;
   filesProcessed: number;
   filesTotal: number;
+  bytesUploaded?: number;
+  bytesTotal?: number;
 }
 
 export interface IJob extends Document {
@@ -43,6 +45,7 @@ export interface IJob extends Document {
   bundleSize: number | null;
   r2Key: string | null;
   downloadCount: number;
+  lastDownloadedAt: Date | null;
   progress: IJobProgress | null;
   error: string | null;
   startedAt: Date | null;
@@ -73,6 +76,8 @@ const JobProgressSchema = new Schema<IJobProgress>(
     step: { type: String },
     filesProcessed: { type: Number, default: 0 },
     filesTotal: { type: Number, default: 0 },
+    bytesUploaded: { type: Number },
+    bytesTotal: { type: Number },
   },
   { _id: false }
 );
@@ -95,6 +100,7 @@ const JobSchema = new Schema<IJob>(
     bundleSize: { type: Number, default: null },
     r2Key: { type: String, default: null },
     downloadCount: { type: Number, default: 0 },
+    lastDownloadedAt: { type: Date, default: null },
     progress: { type: JobProgressSchema, default: null },
     error: { type: String, default: null },
     startedAt: { type: Date, default: null },
@@ -106,5 +112,6 @@ const JobSchema = new Schema<IJob>(
 JobSchema.index({ status: 1, priority: 1, createdAt: 1 });
 JobSchema.index({ createdBy: 1, createdAt: -1 });
 JobSchema.index({ status: 1, downloadCount: -1 });
+JobSchema.index({ status: 1, r2Key: 1, lastDownloadedAt: 1, completedAt: 1 });
 
 export const Job = mongoose.model<IJob>("Job", JobSchema);

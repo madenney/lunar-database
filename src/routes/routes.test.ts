@@ -242,10 +242,14 @@ describe("GET /api/replays/:id", () => {
   });
 });
 
+const TEST_CLIENT_ID = "a0a0a0a0-b1b1-c2c2-d3d3-e4e4e4e4e4e4";
+
 describe("POST /api/jobs", () => {
+  const jobHeaders = { "X-Client-Id": TEST_CLIENT_ID };
+
   it("creates a job", async () => {
     await Replay.create({ filePath: "/test/j.slp", fileHash: "j", players: [{ playerIndex: 0, connectCode: "TEST#1", characterId: 2, characterName: "Fox" }] });
-    const { status, body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" });
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" }, jobHeaders);
 
     expect(status).toBe(201);
     expect(body.jobId).toBeDefined();
@@ -256,7 +260,7 @@ describe("POST /api/jobs", () => {
     await Replay.create({ filePath: "/test/j1.slp", fileHash: "j1", fileSize: 80000, players: [{ playerIndex: 0, connectCode: "EST#1", characterId: 2, characterName: "Fox" }] });
     await Replay.create({ filePath: "/test/j2.slp", fileHash: "j2", fileSize: 120000, players: [{ playerIndex: 0, connectCode: "EST#1", characterId: 2, characterName: "Fox" }] });
 
-    const { body } = await post("/api/jobs", { p1ConnectCode: "EST#1" });
+    const { body } = await post("/api/jobs", { p1ConnectCode: "EST#1" }, jobHeaders);
     const job = await Job.findById(body.jobId);
 
     expect(job!.replayCount).toBe(2);
@@ -266,20 +270,32 @@ describe("POST /api/jobs", () => {
 
   it("stores createdBy from X-Client-Id header", async () => {
     await Replay.create({ filePath: "/test/j.slp", fileHash: "j", players: [{ playerIndex: 0, connectCode: "TEST#1", characterId: 2, characterName: "Fox" }] });
-    const { body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" }, { "X-Client-Id": "test-uuid-123" });
+    const { body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" }, jobHeaders);
 
     const job = await Job.findById(body.jobId);
-    expect(job!.createdBy).toBe("test-uuid-123");
+    expect(job!.createdBy).toBe(TEST_CLIENT_ID);
+  });
+
+  it("rejects when X-Client-Id is missing", async () => {
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/X-Client-Id/i);
+  });
+
+  it("rejects when X-Client-Id is not a valid UUID", async () => {
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "TEST#1" }, { "X-Client-Id": "not-a-uuid" });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/X-Client-Id/i);
   });
 
   it("rejects when no filter provided", async () => {
-    const { status, body } = await post("/api/jobs", {});
+    const { status, body } = await post("/api/jobs", {}, jobHeaders);
     expect(status).toBe(400);
     expect(body.error).toMatch(/filter/i);
   });
 
   it("rejects when no replays match", async () => {
-    const { status, body } = await post("/api/jobs", { p1ConnectCode: "NOBODY#0" });
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "NOBODY#0" }, jobHeaders);
     expect(status).toBe(400);
     expect(body.error).toMatch(/no replays/i);
   });
@@ -292,7 +308,7 @@ describe("POST /api/jobs", () => {
       });
     }
 
-    const { status, body } = await post("/api/jobs", { p1ConnectCode: "JMF#1", maxFiles: 3 });
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "JMF#1", maxFiles: 3 }, jobHeaders);
     expect(status).toBe(201);
 
     const job = await Job.findById(body.jobId);
@@ -504,10 +520,14 @@ describe("GET /api/jobs/:id/download — download count", () => {
     // but the increment happens before the presigned URL generation,
     // so we verify by checking the DB after the attempt
     await fetch(`${baseUrl}/api/jobs/${job._id}/download`, { redirect: "manual" });
-    // Give fire-and-forget a moment to complete
-    await new Promise((r) => setTimeout(r, 100));
 
-    const updated = await Job.findById(job._id);
+    // Poll for the fire-and-forget update to complete (up to 2s)
+    let updated;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      updated = await Job.findById(job._id);
+      if (updated!.downloadCount > 0) break;
+    }
     expect(updated!.downloadCount).toBe(1);
   });
 });

@@ -222,7 +222,7 @@ View the current job processing queue — the active job (if any) and all pendin
     "filter": { "p1ConnectCode": "AKLO#0" },
     "priority": 0,
     "replayCount": 342,
-    "progress": { "step": "compressing", "filesProcessed": 150, "filesTotal": 342 }
+    "progress": { "step": "compressing", "filesProcessed": 150, "filesTotal": 342, "bytesUploaded": null, "bytesTotal": null }
   },
   "queue": [
     {
