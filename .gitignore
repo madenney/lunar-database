@@ -3,3 +3,5 @@ dist/
 data/
 .env
 *.tgz
+*.pem
+credentials.json

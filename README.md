@@ -151,8 +151,95 @@ src/
     crawl.ts         — CLI entry point for crawling
 ```
 
+## Deployment (New Machine)
+
+The API is exposed publicly via a Cloudflare Tunnel at `api.lunarmelee.com`. Everything you need to deploy on a fresh machine is in the `deploy/` folder.
+
+### Prerequisites
+
+- **Node.js** (v20+)
+- **MongoDB** (v8.0) — installed and running as `mongod` systemd service
+- **cloudflared** — [install instructions](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+- **Tunnel credentials** — the `208535eb-4007-4e92-9d8d-4e3ab1c530c5.json` file (keep this secret, copy from previous machine)
+
+### Step by step
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/madenney/lm-database.git
+cd lm-database
+
+# 2. Install dependencies and build
+npm install
+npm run build
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env — fill in paths, R2 keys, JWT secret, etc.
+# Generate a JWT secret: openssl rand -hex 32
+
+# 4. Copy tunnel credentials into place
+# Get the credentials JSON from the old machine (~/.cloudflared/*.json)
+# and put it at: ~/.cloudflared/208535eb-4007-4e92-9d8d-4e3ab1c530c5.json
+
+# 5. Make sure MongoDB is running
+sudo systemctl start mongod
+sudo systemctl enable mongod
+
+# 6. Run the setup script (installs systemd services, starts everything)
+sudo bash deploy/setup.sh
+```
+
+### What the setup script does
+
+1. Copies tunnel credentials to `/etc/cloudflared/credentials.json`
+2. Copies tunnel config to `/etc/cloudflared/config.yml`
+3. Installs two systemd services:
+   - `lm-database-api` — the Express API server
+   - `lm-database-tunnel` — the Cloudflare tunnel
+4. Enables and starts both services (they auto-start on boot)
+
+### Managing services
+
+```bash
+# Check status
+sudo systemctl status lm-database-api
+sudo systemctl status lm-database-tunnel
+
+# View logs (live)
+sudo journalctl -u lm-database-api -f
+sudo journalctl -u lm-database-tunnel -f
+
+# Restart after code changes
+npm run build
+sudo systemctl restart lm-database-api
+
+# Stop everything
+sudo systemctl stop lm-database-api lm-database-tunnel
+```
+
+### If you need to re-create the tunnel from scratch
+
+This should only be necessary if you've lost the credentials file.
+
+```bash
+cloudflared tunnel login              # opens browser, pick lunarmelee.com
+cloudflared tunnel create lm-database # creates new tunnel + credentials JSON
+cloudflared tunnel route dns lm-database api.lunarmelee.com  # set DNS
+# Then update the tunnel ID in deploy/cloudflared.yml and re-run setup
+```
+
+### Deploy folder contents
+
+```
+deploy/
+├── cloudflared.yml              # Tunnel config (api.lunarmelee.com → localhost:3002)
+├── lm-database-api.service      # systemd unit for Express API
+├── lm-database-tunnel.service   # systemd unit for cloudflared
+└── setup.sh                     # Installs everything, run with sudo
+```
+
 ## Future Considerations
 
 - **Database migration** — Schema is designed to be portable. If MongoDB can't handle hundreds of millions of records, migrate to Postgres.
 - **Concurrency** — Job worker currently processes one job at a time. Can be scaled up.
-- **Cloudflare Tunnel** — Not configured here. Set up separately to expose the API.

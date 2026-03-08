@@ -1,0 +1,17 @@
+[Unit]
+Description=lm-database API server
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+User=matt
+WorkingDirectory=/opt/lm-database
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/lm-database/.env
+
+[Install]
+WantedBy=multi-user.target

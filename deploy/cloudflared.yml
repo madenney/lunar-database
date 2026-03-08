@@ -1,0 +1,7 @@
+tunnel: 208535eb-4007-4e92-9d8d-4e3ab1c530c5
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: api.lunarmelee.com
+    service: http://localhost:3002
+  - service: http_status:404
