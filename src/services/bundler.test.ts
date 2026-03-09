@@ -25,15 +25,17 @@ jest.mock("child_process", () => ({
     }
 
     if (cmd === "slpz") {
-      // Simulate slpz: rename .slp files to .slpz in the target dir
-      const targetDir = args[args.length - 1];
-      if (fs.existsSync(targetDir)) {
-        for (const file of fs.readdirSync(targetDir)) {
-          if (file.endsWith(".slp")) {
-            const oldPath = path.join(targetDir, file);
-            const newPath = path.join(targetDir, file.replace(/\.slp$/, ".slpz"));
-            fs.renameSync(oldPath, newPath);
-          }
+      // Simulate slpz -x -o <output.slpz> <input.slp>
+      const oIndex = args.indexOf("-o");
+      if (oIndex !== -1) {
+        const outPath = args[oIndex + 1];
+        const inPath = args[oIndex + 2];
+        if (inPath && fs.existsSync(inPath)) {
+          // Write a small mock .slpz file
+          fs.writeFileSync(outPath, fs.readFileSync(inPath));
+        } else {
+          callback(new Error(`No such file: ${inPath}`));
+          return;
         }
       }
       callback(null, { stdout: "", stderr: "" });
@@ -99,7 +101,7 @@ describe("bundler", () => {
     it("throws when no files exist", async () => {
       await expect(
         createBundle(["/tmp/nope-does-not-exist.slp"], "cccccccccccccccccccccccc")
-      ).rejects.toThrow("No files were copied for bundling");
+      ).rejects.toThrow("No files were compressed for bundling");
     });
   });
 

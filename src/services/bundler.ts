@@ -28,9 +28,9 @@ async function getFreeDiskBytes(): Promise<number> {
 
 /**
  * Creates a compressed bundle:
- * 1. Copy .slp files to a temp dir
- * 2. Run `slpz -r --rm -x <tempDir>` to compress .slp → .slpz in-place
- * 3. Tar the .slpz files (no gzip — slpz already compressed)
+ * 1. Compress each .slp directly to temp dir using `slpz -x -o <out.slpz> <source.slp>`
+ *    (never copies, moves, or modifies original .slp files)
+ * 2. Tar the .slpz files (no gzip — slpz already compressed)
  */
 export async function createBundle(
   filePaths: string[],
@@ -50,53 +50,57 @@ export async function createBundle(
   await fsp.mkdir(jobDir, { recursive: true });
 
   const slpzTimeoutMs = config.slpzTimeoutMinutes * 60 * 1000;
+  const perFileTimeoutMs = 60 * 1000; // 1 minute per file
 
-  // Copy .slp files to temp dir (async to avoid blocking the event loop)
-  // Use index prefix to prevent filename collisions (e.g. two different game.slp)
-  let copied = 0;
+  // Compress each .slp directly to temp dir as .slpz
+  // Use index prefix to prevent filename collisions (e.g. two different Game_20240101T000000.slp)
+  let compressed = 0;
   for (let i = 0; i < filePaths.length; i++) {
     const fp = filePaths[i];
+    const outName = `${i}_${path.basename(fp, ".slp")}.slpz`;
+    const outPath = path.join(jobDir, outName);
     try {
-      await fsp.copyFile(fp, path.join(jobDir, `${i}_${path.basename(fp)}`));
-      copied++;
-      if (onProgress && copied % 100 === 0) {
-        onProgress(copied, filePaths.length);
+      await execFileAsync("slpz", ["-x", "-o", outPath, fp], {
+        timeout: perFileTimeoutMs,
+        killSignal: "SIGKILL",
+      });
+      compressed++;
+      if (onProgress && compressed % 100 === 0) {
+        onProgress(compressed, filePaths.length);
       }
       // Yield every 50 files so Express can serve requests
-      if (copied % 50 === 0) await yieldToEventLoop();
+      if (compressed % 50 === 0) await yieldToEventLoop();
     } catch (err) {
-      // ENOENT is expected if file was deleted since query; skip silently
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error(`Failed to copy ${fp}:`, (err as Error).message);
+      const code = (err as NodeJS.ErrnoException).code;
+      const msg = (err as Error).message;
+      // ENOENT = source file missing (deleted since query); skip silently
+      // slpz exits non-zero for missing input, check stderr too
+      if (code !== "ENOENT" && !msg.includes("No such file")) {
+        console.error(`Failed to compress ${fp}:`, msg);
       }
+      // Clean up partial output if slpz failed mid-write
+      try { await fsp.unlink(outPath); } catch {}
     }
 
     // Re-check disk space every 500 files
-    if (copied % 500 === 0) {
+    if (compressed > 0 && compressed % 500 === 0) {
       const currentFree = await getFreeDiskBytes();
       if (currentFree / (1024 * 1024) < config.minFreeDiskMb) {
         cleanupJobTemp(jobId);
         throw new Error(
-          `Disk space dropped below ${config.minFreeDiskMb}MB during copy — aborting`
+          `Disk space dropped below ${config.minFreeDiskMb}MB during compression — aborting`
         );
       }
     }
   }
-  if (onProgress) onProgress(copied, filePaths.length);
+  if (onProgress) onProgress(compressed, filePaths.length);
 
-  if (copied === 0) {
+  if (compressed === 0) {
     cleanupJobTemp(jobId);
-    throw new Error("No files were copied for bundling");
+    throw new Error("No files were compressed for bundling");
   }
 
-  // Run slpz to compress .slp → .slpz (removes originals with --rm)
-  await execFileAsync("slpz", ["-r", "--rm", "-x", jobDir], {
-    maxBuffer: 50 * 1024 * 1024,
-    timeout: slpzTimeoutMs,
-    killSignal: "SIGKILL",
-  });
-
-  // Tar the .slpz files (should be fast, but cap at same timeout for safety)
+  // Tar the .slpz files
   const tarPath = path.join(config.jobTempDir, `${jobId}.tar`);
   await execFileAsync("tar", ["-cf", tarPath, "-C", jobDir, "."], {
     maxBuffer: 50 * 1024 * 1024,
