@@ -11,6 +11,7 @@ ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/matt/.cargo/bin
 EnvironmentFile=/opt/lm-database/.env
 
 [Install]
