@@ -1,29 +1,28 @@
 import fs from "fs";
-import { S3Client, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config";
 
 let client: S3Client | null = null;
 
 function getClient(): S3Client {
   if (!client) {
-    if (!config.r2Configured) {
-      throw new Error("R2 credentials not configured (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)");
+    if (!config.s3Configured) {
+      throw new Error("S3 credentials not configured (S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)");
     }
     client = new S3Client({
-      region: "auto",
-      endpoint: `https://${config.r2AccountId}.r2.cloudflarestorage.com`,
+      region: config.s3Region,
+      endpoint: config.s3Endpoint,
       credentials: {
-        accessKeyId: config.r2AccessKeyId,
-        secretAccessKey: config.r2SecretAccessKey,
+        accessKeyId: config.s3AccessKeyId,
+        secretAccessKey: config.s3SecretAccessKey,
       },
     });
   }
   return client;
 }
 
-export async function uploadToR2(
+export async function uploadToStorage(
   filePath: string,
   key: string,
   onProgress?: (loaded: number, total: number) => void
@@ -35,7 +34,7 @@ export async function uploadToR2(
     const upload = new Upload({
       client: getClient(),
       params: {
-        Bucket: config.r2BucketName,
+        Bucket: config.s3BucketName,
         Key: key,
         Body: body,
         ContentLength: stat.size,
@@ -55,19 +54,17 @@ export async function uploadToR2(
   }
 }
 
-export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 48 * 60 * 60): Promise<string> {
-  const command = new GetObjectCommand({
-    Bucket: config.r2BucketName,
-    Key: key,
-  });
-
-  return getSignedUrl(getClient(), command, { expiresIn: expiresInSeconds });
+export function getPublicDownloadUrl(key: string): string {
+  if (!config.publicDownloadBase) {
+    throw new Error("PUBLIC_DOWNLOAD_BASE not configured");
+  }
+  return `${config.publicDownloadBase}/${key}`;
 }
 
-export async function deleteFromR2(key: string): Promise<void> {
+export async function deleteFromStorage(key: string): Promise<void> {
   await getClient().send(
     new DeleteObjectCommand({
-      Bucket: config.r2BucketName,
+      Bucket: config.s3BucketName,
       Key: key,
     })
   );

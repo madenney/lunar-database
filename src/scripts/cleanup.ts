@@ -1,13 +1,13 @@
 import mongoose from "mongoose";
 import { connectDb } from "../db";
-import { cleanupStaleR2Objects } from "../services/r2Cleanup";
+import { cleanupExpiredJobs } from "../services/storageCleanup";
 import { config } from "../config";
 
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
 
-  let maxAgeDays = config.r2CleanupAfterDays;
+  let maxAgeDays = config.storageCleanupAfterDays;
   const daysIdx = args.indexOf("--days");
   if (daysIdx !== -1 && args[daysIdx + 1]) {
     maxAgeDays = parseInt(args[daysIdx + 1], 10);
@@ -19,15 +19,15 @@ async function main() {
 
   await connectDb();
 
-  console.log(`R2 Cleanup ${dryRun ? "(DRY RUN)" : ""}`);
+  console.log(`Storage Cleanup ${dryRun ? "(DRY RUN)" : ""}`);
   console.log(`  Max age: ${maxAgeDays} days`);
   console.log("");
 
-  const result = await cleanupStaleR2Objects(maxAgeDays, dryRun);
+  const result = await cleanupExpiredJobs(maxAgeDays, dryRun);
 
   const freedMb = (result.freedBytes / 1024 / 1024).toFixed(1);
-  console.log(`  Stale objects found: ${result.checked}`);
-  console.log(`  ${dryRun ? "Would delete" : "Deleted"}: ${result.cleaned}`);
+  console.log(`  Expired jobs found: ${result.checked}`);
+  console.log(`  ${dryRun ? "Would clear" : "Cleared"}: ${result.cleaned}`);
   console.log(`  ${dryRun ? "Would free" : "Freed"}: ${freedMb} MB`);
   if (result.errors > 0) {
     console.log(`  Errors: ${result.errors}`);

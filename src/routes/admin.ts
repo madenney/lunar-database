@@ -11,8 +11,8 @@ import { sendError } from "../utils/sendError";
 import { startCompressor, stopCompressor, isCompressorRunning, getCompressorJobId } from "../workers/compressWorker";
 import { startUploader, stopUploader, isUploaderRunning, getUploaderJobId } from "../workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker, isCleanupRunning } from "../workers/cleanupWorker";
-import { cleanupStaleR2Objects } from "../services/r2Cleanup";
-import { deleteFromR2 } from "../services/r2";
+import { cleanupExpiredJobs } from "../services/storageCleanup";
+import { deleteFromStorage } from "../services/storage";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
 import { parseFilter } from "./jobs";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
@@ -96,8 +96,8 @@ router.get("/status", async (_req: Request, res: Response) => {
       },
       cleanup: {
         running: isCleanupRunning(),
-        maxAgeDays: config.r2CleanupAfterDays,
-        intervalMinutes: config.r2CleanupIntervalMinutes,
+        maxAgeDays: config.storageCleanupAfterDays,
+        intervalMinutes: config.storageCleanupIntervalMinutes,
       },
       replays: replayCount,
       jobs,
@@ -196,8 +196,8 @@ router.get("/worker/status", (_req: Request, res: Response) => {
     },
     cleanup: {
       running: isCleanupRunning(),
-      maxAgeDays: config.r2CleanupAfterDays,
-      intervalMinutes: config.r2CleanupIntervalMinutes,
+      maxAgeDays: config.storageCleanupAfterDays,
+      intervalMinutes: config.storageCleanupIntervalMinutes,
     },
   });
 });
@@ -368,12 +368,12 @@ router.delete("/jobs/:id", async (req: Request, res: Response) => {
       return;
     }
 
-    // Clean up R2 object if it exists
+    // Clean up storage object if it exists
     if (job.r2Key) {
       try {
-        await deleteFromR2(job.r2Key);
+        await deleteFromStorage(job.r2Key);
       } catch (err) {
-        console.error(`Failed to delete R2 key ${job.r2Key}:`, (err as Error).message);
+        console.error(`Failed to delete storage key ${job.r2Key}:`, (err as Error).message);
       }
     }
 
@@ -432,14 +432,14 @@ router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/admin/r2/cleanup — on-demand R2 stale object cleanup
-router.post("/r2/cleanup", async (req: Request, res: Response) => {
+// POST /api/admin/storage/cleanup — on-demand expired job cleanup (DB-only, B2 lifecycle handles objects)
+router.post("/storage/cleanup", async (req: Request, res: Response) => {
   try {
-    const rawDays = Number(req.body.maxAgeDays ?? config.r2CleanupAfterDays);
-    const maxAgeDays = Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : config.r2CleanupAfterDays;
+    const rawDays = Number(req.body.maxAgeDays ?? config.storageCleanupAfterDays);
+    const maxAgeDays = Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : config.storageCleanupAfterDays;
     const dryRun = !!req.body.dryRun;
 
-    const result = await cleanupStaleR2Objects(maxAgeDays, dryRun);
+    const result = await cleanupExpiredJobs(maxAgeDays, dryRun);
     res.json({
       dryRun,
       maxAgeDays,

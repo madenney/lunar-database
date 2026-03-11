@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { cleanupStaleR2Objects } from "../services/r2Cleanup";
+import { cleanupExpiredJobs } from "../services/storageCleanup";
 
 let running = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -10,11 +10,11 @@ export function isCleanupRunning(): boolean {
 
 async function runCleanup(): Promise<void> {
   try {
-    const result = await cleanupStaleR2Objects(config.r2CleanupAfterDays);
+    const result = await cleanupExpiredJobs(config.storageCleanupAfterDays);
     if (result.cleaned > 0 || result.errors > 0) {
       const freedMb = (result.freedBytes / 1024 / 1024).toFixed(1);
       console.log(
-        `R2 cleanup: ${result.cleaned} objects deleted (${freedMb} MB freed), ${result.errors} errors`
+        `Storage cleanup: ${result.cleaned} expired jobs cleared (${freedMb} MB), ${result.errors} errors`
       );
     }
   } catch (err) {
@@ -26,7 +26,7 @@ export function startCleanupWorker(): void {
   running = true;
   console.log("Cleanup worker started");
 
-  const intervalMs = config.r2CleanupIntervalMinutes * 60 * 1000;
+  const intervalMs = config.storageCleanupIntervalMinutes * 60 * 1000;
 
   const tick = async () => {
     if (!running) return;

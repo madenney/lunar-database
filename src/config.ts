@@ -10,13 +10,15 @@ export const config = {
   crawlerBatchSize: parseInt(process.env.CRAWLER_BATCH_SIZE || "100", 10),
   airlockDir: process.env.AIRLOCK_DIR || "/data/airlock",
 
-  // R2 / S3 storage
-  r2AccountId: process.env.R2_ACCOUNT_ID || "",
-  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || "",
-  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
-  r2BucketName: process.env.R2_BUCKET_NAME || "lm-replays",
-  get r2Configured(): boolean {
-    return !!(this.r2AccountId && this.r2AccessKeyId && this.r2SecretAccessKey);
+  // S3-compatible storage (Backblaze B2)
+  s3Endpoint: process.env.S3_ENDPOINT || "",
+  s3Region: process.env.S3_REGION || "us-west-004",
+  s3AccessKeyId: process.env.S3_ACCESS_KEY_ID || "",
+  s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY || "",
+  s3BucketName: process.env.S3_BUCKET_NAME || "lm-replays",
+  publicDownloadBase: process.env.PUBLIC_DOWNLOAD_BASE || "",
+  get s3Configured(): boolean {
+    return !!(this.s3Endpoint && this.s3AccessKeyId && this.s3SecretAccessKey);
   },
 
   // Job settings
@@ -33,9 +35,9 @@ export const config = {
   // Estimate settings
   estimateUploadSpeedMbps: parseInt(process.env.ESTIMATE_UPLOAD_SPEED_MBPS || "10", 10),
 
-  // R2 cleanup
-  r2CleanupAfterDays: parseInt(process.env.R2_CLEANUP_AFTER_DAYS || "30", 10),
-  r2CleanupIntervalMinutes: parseInt(process.env.R2_CLEANUP_INTERVAL_MINUTES || "60", 10),
+  // Storage cleanup (DB-only — B2 lifecycle rules handle object expiry)
+  storageCleanupAfterDays: parseInt(process.env.STORAGE_CLEANUP_AFTER_DAYS || "3", 10),
+  storageCleanupIntervalMinutes: parseInt(process.env.STORAGE_CLEANUP_INTERVAL_MINUTES || "60", 10),
 
   // Auth
   get jwtSecret(): string {

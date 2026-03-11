@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
-import { getPresignedDownloadUrl } from "../services/r2";
+import { getPublicDownloadUrl } from "../services/storage";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { config } from "../config";
@@ -307,7 +307,7 @@ router.get("/:id", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/jobs/:id/download — generate fresh presigned URL and redirect
+// GET /api/jobs/:id/download — return public download URL
 router.get("/:id/download", async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -331,9 +331,8 @@ router.get("/:id/download", async (req: Request, res: Response) => {
     // Increment download counter and update last download timestamp
     Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec().catch(() => {});
 
-    // Generate a fresh 1-hour presigned URL on each request
-    const url = await getPresignedDownloadUrl(job.r2Key, 3600);
-    res.json({ url, expiresIn: 3600 });
+    const url = getPublicDownloadUrl(job.r2Key);
+    res.json({ url });
   } catch (err) {
     sendError(res, err);
   }

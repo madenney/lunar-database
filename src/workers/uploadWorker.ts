@@ -1,6 +1,6 @@
 import path from "path";
 import { Job } from "../models/Job";
-import { uploadToR2, deleteFromR2 } from "../services/r2";
+import { uploadToStorage, deleteFromStorage } from "../services/storage";
 import { cleanupJobTemp } from "../services/bundler";
 import { isCancelled } from "./utils";
 import { config } from "../config";
@@ -49,7 +49,7 @@ export async function processNextUpload(): Promise<boolean> {
 
     const r2Key = `jobs/${jobId}.tar`;
     let lastReportedPct = 0;
-    await uploadToR2(job.bundlePath, r2Key, (loaded, total) => {
+    await uploadToStorage(job.bundlePath, r2Key, (loaded, total) => {
       const pct = total > 0 ? Math.floor((loaded / total) * 100) : 0;
       if (pct >= lastReportedPct + 1) {
         lastReportedPct = pct;
@@ -67,8 +67,8 @@ export async function processNextUpload(): Promise<boolean> {
     // Cancellation checkpoint: after upload
     if (await isCancelled(jobId)) {
       console.log(`Job ${jobId} cancelled after upload, deleting R2 object`);
-      await deleteFromR2(r2Key).catch((err) =>
-        console.error(`Failed to delete R2 key ${r2Key}:`, err.message)
+      await deleteFromStorage(r2Key).catch((err) =>
+        console.error(`Failed to delete storage key ${r2Key}:`, err.message)
       );
       cleanupJobTemp(jobId);
       return true;
@@ -84,7 +84,7 @@ export async function processNextUpload(): Promise<boolean> {
     cleanupJobTemp(jobId);
 
     console.log(
-      `Job ${jobId} uploaded: ${(job.bundleSize! / 1024 / 1024).toFixed(1)}MB to R2`
+      `Job ${jobId} uploaded: ${(job.bundleSize! / 1024 / 1024).toFixed(1)}MB to B2`
     );
   } catch (err) {
     try {

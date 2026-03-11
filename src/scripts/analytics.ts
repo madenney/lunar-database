@@ -162,24 +162,24 @@ async function main() {
     row("Waste ratio", ((zeroDownloads / completedCount) * 100).toFixed(1) + "%");
   }
 
-  // --- R2 Storage ---
-  heading("R2 Storage");
-  const r2Active = await Job.aggregate([
+  // --- B2 Storage ---
+  heading("B2 Storage");
+  const storageActive = await Job.aggregate([
     { $match: { status: "completed", r2Key: { $ne: null } } },
     { $group: { _id: null, count: { $sum: 1 }, totalSize: { $sum: "$bundleSize" } } },
   ]);
-  const activeCount = r2Active[0]?.count ?? 0;
-  const activeSize = r2Active[0]?.totalSize ?? 0;
-  row("Active R2 objects", fmt.num(activeCount));
-  row("Active R2 size", fmt.bytes(activeSize));
+  const activeCount = storageActive[0]?.count ?? 0;
+  const activeSize = storageActive[0]?.totalSize ?? 0;
+  row("Active objects", fmt.num(activeCount));
+  row("Active size", fmt.bytes(activeSize));
 
-  const r2Cleaned = await Job.aggregate([
+  const storageCleaned = await Job.aggregate([
     { $match: { status: "completed", r2Key: null, bundleSize: { $ne: null } } },
     { $group: { _id: null, count: { $sum: 1 }, totalSize: { $sum: "$bundleSize" } } },
   ]);
-  const cleanedCount = r2Cleaned[0]?.count ?? 0;
-  const cleanedSize = r2Cleaned[0]?.totalSize ?? 0;
-  row("Cleaned R2 objects", fmt.num(cleanedCount));
+  const cleanedCount = storageCleaned[0]?.count ?? 0;
+  const cleanedSize = storageCleaned[0]?.totalSize ?? 0;
+  row("Expired objects", fmt.num(cleanedCount));
   row("Freed storage", fmt.bytes(cleanedSize));
 
   console.log("");

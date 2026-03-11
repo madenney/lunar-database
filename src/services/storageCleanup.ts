@@ -1,5 +1,4 @@
 import { Job } from "../models/Job";
-import { deleteFromR2 } from "./r2";
 
 export interface CleanupResult {
   checked: number;
@@ -8,21 +7,22 @@ export interface CleanupResult {
   errors: number;
 }
 
-export async function cleanupStaleR2Objects(
+/**
+ * DB-only cleanup: nullify r2Key on expired jobs so downloadReady stays accurate.
+ * Actual object deletion is handled by B2 lifecycle rules on the jobs/ prefix.
+ */
+export async function cleanupExpiredJobs(
   maxAgeDays: number,
   dryRun = false
 ): Promise<CleanupResult> {
   const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000);
 
-  // Find completed jobs with R2 objects where the most recent activity is older than cutoff.
-  // "Most recent activity" = lastDownloadedAt if ever downloaded, otherwise completedAt.
+  // Find completed jobs with storage keys older than the lifecycle cutoff
   const staleJobs = await Job.find({
     status: "completed",
     r2Key: { $ne: null },
     $or: [
-      // Downloaded before, but last download is stale
       { lastDownloadedAt: { $ne: null, $lt: cutoff } },
-      // Never downloaded, and completed before cutoff
       { lastDownloadedAt: null, completedAt: { $lt: cutoff } },
     ],
   })
@@ -44,12 +44,12 @@ export async function cleanupStaleR2Objects(
     }
 
     try {
-      await deleteFromR2(job.r2Key!);
+      // Just null out the key — B2 lifecycle rules handle the actual object deletion
       await Job.updateOne({ _id: job._id }, { $set: { r2Key: null } });
       result.cleaned++;
       result.freedBytes += job.bundleSize ?? 0;
     } catch (err) {
-      console.error(`Failed to clean up R2 object for job ${job._id}:`, (err as Error).message);
+      console.error(`Failed to clean up job ${job._id}:`, (err as Error).message);
       result.errors++;
     }
   }
