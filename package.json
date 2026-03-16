@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "predev": "sudo systemctl stop lm-database-api 2>/dev/null; fuser -k 3002/tcp 2>/dev/null; true",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "db:start": "sudo systemctl start mongod && echo 'MongoDB started'",
     "db:stop": "sudo systemctl stop mongod && echo 'MongoDB stopped'",

@@ -29,6 +29,7 @@ export const config = {
 
   // Worker safety limits
   jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "60", 10),
+  slpzBinary: process.env.SLPZ_BINARY || "/home/matt/.cargo/bin/slpz",
   slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
 

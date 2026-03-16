@@ -1,3 +1,4 @@
+import fs from "fs";
 import path from "path";
 import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
@@ -39,11 +40,16 @@ export async function processNextCompression(): Promise<boolean> {
   }
 
   try {
+    // Verify SLP root directory is accessible (e.g. drive is mounted)
+    const resolvedRoot = path.resolve(config.slpRootDir);
+    if (!fs.existsSync(resolvedRoot)) {
+      throw new Error(`SLP root directory not found: ${resolvedRoot} — is the drive mounted?`);
+    }
+
     // Build query from filter
     const query = buildReplaySearchQuery(job.filter);
     const allReplays = await Replay.find(query).select("filePath fileSize").lean();
     const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
-    const resolvedRoot = path.resolve(config.slpRootDir);
     const filePaths = replays
       .map((r) => r.filePath)
       .filter((fp) => path.resolve(fp).startsWith(resolvedRoot + path.sep));

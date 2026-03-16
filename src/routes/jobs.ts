@@ -8,6 +8,17 @@ import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 
 const router = Router();
 
+/** Errors safe to show to API consumers as-is */
+const USER_FACING_ERRORS = [
+  "No replays matched the filter",
+];
+
+/** Return a generic message for internal errors, pass through user-facing ones */
+function sanitizeJobError(error: string): string {
+  if (USER_FACING_ERRORS.some((msg) => error.startsWith(msg))) return error;
+  return "Server error — please try again later";
+}
+
 export function parseFilter(body: Record<string, any>): IJobFilter {
   const filter: IJobFilter = {};
   if (body.p1ConnectCode) filter.p1ConnectCode = String(body.p1ConnectCode);
@@ -293,7 +304,7 @@ router.get("/:id", async (req: Request, res: Response) => {
       downloadReady: job.status === "completed" && !!job.r2Key,
       downloadCount: job.downloadCount,
       progress: job.progress,
-      error: job.error,
+      error: job.error ? sanitizeJobError(job.error) : null,
       queuePosition,
       estimatedWaitSec,
       estimatedProcessingTimeSec,

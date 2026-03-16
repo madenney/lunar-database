@@ -60,7 +60,7 @@ export async function createBundle(
     const outName = `${i}_${path.basename(fp, ".slp")}.slpz`;
     const outPath = path.join(jobDir, outName);
     try {
-      await execFileAsync("slpz", ["-x", "-o", outPath, fp], {
+      await execFileAsync(config.slpzBinary, ["-x", "-o", outPath, fp], {
         timeout: perFileTimeoutMs,
         killSignal: "SIGKILL",
       });
@@ -73,8 +73,12 @@ export async function createBundle(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       const msg = (err as Error).message;
-      // ENOENT = source file missing (deleted since query); skip silently
-      // slpz exits non-zero for missing input, check stderr too
+      // ENOENT from execFile can mean either the binary or the source file is missing.
+      // If the binary isn't found, bail immediately — no point continuing.
+      if (code === "ENOENT" && msg.includes("spawn " + config.slpzBinary)) {
+        throw new Error(`slpz binary not found at ${config.slpzBinary} — is it installed?`);
+      }
+      // Source file missing (deleted since query); skip silently
       if (code !== "ENOENT" && !msg.includes("No such file")) {
         console.error(`Failed to compress ${fp}:`, msg);
       }
