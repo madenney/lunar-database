@@ -48,7 +48,7 @@ async function recoverStaleJobs() {
       job.bundlePath = null;
       job.bundleSize = null;
       await job.save();
-      console.log(`Recovered stale job ${job._id} (was uploading, no tar) → pending`);
+      console.log(`Recovered stale job ${job._id} (was uploading, no bundle) → pending`);
     }
   }
 }

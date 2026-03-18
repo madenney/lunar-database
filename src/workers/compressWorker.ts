@@ -80,7 +80,7 @@ export async function processNextCompression(): Promise<boolean> {
     job.progress = { step: "compressing", filesProcessed: 0, filesTotal: filePaths.length };
     await job.save();
 
-    const { tarPath, size } = await createBundle(filePaths, jobId, (processed, total) => {
+    const { zipPath, size } = await createBundle(filePaths, jobId, (processed, total) => {
       // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
       Job.updateOne(
         { _id: job._id, status: "compressing" },
@@ -102,7 +102,7 @@ export async function processNextCompression(): Promise<boolean> {
 
     // Mark as compressed — uploader will pick it up
     job.status = "compressed";
-    job.bundlePath = tarPath;
+    job.bundlePath = zipPath;
     job.bundleSize = size;
     job.progress = null;
     await job.save();

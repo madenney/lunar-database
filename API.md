@@ -204,7 +204,7 @@ All fields are optional. Values are comma-separated strings (same format as the 
   "replayCount": 342,
   "rawSize": 83886080,
   "estimatedSlpzSize": 10485760,
-  "estimatedTarSize": 10836352,
+  "estimatedZipSize": 10836352,
   "estimatedTimeSec": 45,
   "totalDurationFrames": 2160000
 }
@@ -215,7 +215,7 @@ All fields are optional. Values are comma-separated strings (same format as the 
 | `replayCount` | number | Number of matching replays. |
 | `rawSize` | number | Total raw `.slp` file size in bytes. |
 | `estimatedSlpzSize` | number | Estimated size after slpz compression in bytes (`rawSize / 8`). |
-| `estimatedTarSize` | number | Estimated `.tar` archive size in bytes (`estimatedSlpzSize + replayCount * 1024`). |
+| `estimatedZipSize` | number | Estimated `.zip` archive size in bytes (`estimatedSlpzSize + replayCount * 128`). |
 | `estimatedTimeSec` | number | Estimated processing time in seconds (compression + upload). |
 | `totalDurationFrames` | number | Sum of all matching replay durations in frames (60 fps). |
 
@@ -223,7 +223,7 @@ All fields are optional. Values are comma-separated strings (same format as the 
 
 ## Download Jobs
 
-Request bulk downloads of replays matching a filter. Replays are compressed with [slpz](https://github.com/Walnut356/slpz) (~8x smaller than raw .slp) and packaged into a `.tar` archive. The archive is uploaded to CDN storage (Cloudflare R2) and a download link is provided.
+Request bulk downloads of replays matching a filter. Replays are compressed with [slpz](https://github.com/Walnut356/slpz) (~8x smaller than raw .slp) and packaged into a `.zip` archive (store mode — no additional compression). The archive is uploaded to CDN storage and a download link is provided.
 
 ### Create Download Job
 
@@ -496,11 +496,17 @@ if (progress.step === "compressing") {
 GET /api/jobs/:id/download
 ```
 
-Redirects to a fresh presigned CDN download URL (valid for 1 hour). The download is a `.tar` archive containing `.slpz` compressed replay files. Each download increments the job's `downloadCount`.
+Returns a public CDN download URL. The download is a `.zip` archive containing `.slpz` compressed replay files. Each download increments the job's `downloadCount`.
 
-To decompress the replays, extract the tar and run [slpz](https://github.com/Walnut356/slpz) to convert `.slpz` back to `.slp`.
+To decompress the replays, extract the zip and run [slpz](https://github.com/Walnut356/slpz) to convert `.slpz` back to `.slp`.
 
-**Response** `302` — Redirect to presigned R2 download URL.
+**Response** `200`
+
+```json
+{
+  "url": "https://cdn.lunarmelee.com/jobs/6651a....zip"
+}
+```
 
 **Response** `400` — `{ "error": "Download not ready" }` — Job hasn't completed or archive is missing.
 

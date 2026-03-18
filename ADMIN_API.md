@@ -136,8 +136,8 @@ Overview of worker state, replay count, job breakdown, disk usage, and active re
 
 Job processing is split into two independent workers:
 
-- **Compressor** — picks up `pending` jobs, queries replays, compresses into a `.tar` bundle, and sets status to `compressed`.
-- **Uploader** — picks up `compressed` jobs, uploads the bundle to R2, and sets status to `completed`.
+- **Compressor** — picks up `pending` jobs, queries replays, compresses into a `.zip` bundle (slpz + zip store mode), and sets status to `compressed`.
+- **Uploader** — picks up `compressed` jobs, uploads the bundle to B2 storage, and sets status to `completed`.
 
 **Job lifecycle:** `pending → processing → compressing → compressed → uploading → completed`
 
@@ -300,9 +300,9 @@ GET /api/admin/jobs
       "replayIds": ["...", "..."],
       "replayCount": 342,
       "estimatedSize": 83886080,
-      "bundlePath": "/tmp/jobs/6651a.tar",
+      "bundlePath": "/tmp/jobs/6651a.zip",
       "bundleSize": 10836352,
-      "r2Key": "jobs/6651a.tar",
+      "r2Key": "jobs/6651a.zip",
       "progress": null,
       "error": null,
       "startedAt": "2024-06-01T12:00:01.000Z",
@@ -420,7 +420,7 @@ Reset a `failed` or `cancelled` job back to `pending` so it gets picked up again
 POST /api/admin/temp/cleanup
 ```
 
-Remove orphaned temp directories and tar files from the job temp directory. Files older than `maxAgeHours` are deleted. Orphans are typically left behind by crashes or killed processes.
+Remove orphaned temp directories and zip files from the job temp directory. Files older than `maxAgeHours` are deleted. Orphans are typically left behind by crashes or killed processes.
 
 This runs automatically on server startup (24h threshold), but can also be triggered manually.
 

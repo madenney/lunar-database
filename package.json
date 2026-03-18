@@ -18,7 +18,8 @@
     "jobs": "ts-node src/scripts/jobs.ts",
     "workers": "ts-node src/scripts/workers.ts",
     "cleanup": "ts-node src/scripts/cleanup.ts",
-    "analytics": "ts-node src/scripts/analytics.ts"
+    "analytics": "ts-node src/scripts/analytics.ts",
+    "dashboard": "ts-node src/scripts/dashboard.ts"
   },
   "repository": {
     "type": "git",

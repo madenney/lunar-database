@@ -28,7 +28,7 @@ router.post("/estimate", async (req: Request, res: Response) => {
       replayCount: count,
       rawSize,
       estimatedSlpzSize: Math.round(rawSize / 8),
-      estimatedTarSize: estimates.estimatedTarSize,
+      estimatedZipSize: estimates.estimatedZipSize,
       estimatedTimeSec: estimates.estimatedProcessingTimeSec,
       totalDurationFrames,
     });

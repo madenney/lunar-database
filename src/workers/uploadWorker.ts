@@ -47,7 +47,7 @@ export async function processNextUpload(): Promise<boolean> {
     job.progress = { step: "uploading", filesProcessed: 0, filesTotal: 1, bytesUploaded: 0, bytesTotal: totalBytes };
     await job.save();
 
-    const r2Key = `jobs/${jobId}.tar`;
+    const r2Key = `jobs/${jobId}.zip`;
     let lastReportedPct = 0;
     await uploadToStorage(job.bundlePath, r2Key, (loaded, total) => {
       const pct = total > 0 ? Math.floor((loaded / total) * 100) : 0;

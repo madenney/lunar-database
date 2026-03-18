@@ -89,7 +89,7 @@ describe("POST /api/replays/estimate", () => {
     expect(body.replayCount).toBe(2);
     expect(body.rawSize).toBe(200000);
     expect(body.estimatedSlpzSize).toBe(25000);
-    expect(body.estimatedTarSize).toBe(25000 + 2 * 1024);
+    expect(body.estimatedZipSize).toBe(25000 + 2 * 128);
     expect(body.estimatedTimeSec).toBeGreaterThanOrEqual(0);
   });
 
@@ -383,7 +383,7 @@ describe("GET /api/jobs/:id", () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" },
       status: "completed",
-      r2Key: "jobs/test.tar",
+      r2Key: "jobs/test.zip",
     });
 
     const { body } = await get(`/api/jobs/${job._id}`);
@@ -431,7 +431,7 @@ describe("GET /api/jobs/:id", () => {
   });
 
   it("returns null queue fields for terminal statuses", async () => {
-    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "completed", r2Key: "jobs/test.tar" });
+    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "completed", r2Key: "jobs/test.zip" });
 
     const { body } = await get(`/api/jobs/${job._id}`);
     expect(body.queuePosition).toBeNull();
@@ -475,11 +475,11 @@ describe("GET /api/jobs/:id/download", () => {
 describe("GET /api/jobs/bundles", () => {
   it("returns completed jobs sorted by downloadCount", async () => {
     await Job.create({
-      filter: { p1ConnectCode: "A#1" }, status: "completed", r2Key: "jobs/a.tar",
+      filter: { p1ConnectCode: "A#1" }, status: "completed", r2Key: "jobs/a.zip",
       replayCount: 10, bundleSize: 5000, downloadCount: 5, completedAt: new Date(),
     });
     await Job.create({
-      filter: { p1ConnectCode: "B#1" }, status: "completed", r2Key: "jobs/b.tar",
+      filter: { p1ConnectCode: "B#1" }, status: "completed", r2Key: "jobs/b.zip",
       replayCount: 20, bundleSize: 10000, downloadCount: 15, completedAt: new Date(),
     });
     await Job.create({
@@ -498,7 +498,7 @@ describe("GET /api/jobs/bundles", () => {
   it("paginates bundles", async () => {
     for (let i = 0; i < 3; i++) {
       await Job.create({
-        filter: { p1ConnectCode: `P${i}#1` }, status: "completed", r2Key: `jobs/p${i}.tar`,
+        filter: { p1ConnectCode: `P${i}#1` }, status: "completed", r2Key: `jobs/p${i}.zip`,
         replayCount: 10, bundleSize: 5000, downloadCount: i, completedAt: new Date(),
       });
     }
@@ -513,7 +513,7 @@ describe("GET /api/jobs/:id/download — download count", () => {
   it("increments downloadCount on each download", async () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" }, status: "completed",
-      r2Key: "jobs/test.tar", downloadCount: 0,
+      r2Key: "jobs/test.zip", downloadCount: 0,
     });
 
     // The download will fail since R2 is not configured in tests,

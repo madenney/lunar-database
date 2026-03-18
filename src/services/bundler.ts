@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
 const yieldToEventLoop = () => new Promise<void>((r) => setImmediate(r));
 
 export interface BundleResult {
-  tarPath: string;
+  zipPath: string;
   size: number;
 }
 
@@ -30,7 +30,7 @@ async function getFreeDiskBytes(): Promise<number> {
  * Creates a compressed bundle:
  * 1. Compress each .slp directly to temp dir using `slpz -x -o <out.slpz> <source.slp>`
  *    (never copies, moves, or modifies original .slp files)
- * 2. Tar the .slpz files (no gzip — slpz already compressed)
+ * 2. Zip the .slpz files in store mode (no compression — slpz already compressed)
  */
 export async function createBundle(
   filePaths: string[],
@@ -104,20 +104,21 @@ export async function createBundle(
     throw new Error("No files were compressed for bundling");
   }
 
-  // Tar the .slpz files
-  const tarPath = path.join(config.jobTempDir, `${jobId}.tar`);
-  await execFileAsync("tar", ["-cf", tarPath, "-C", jobDir, "."], {
+  // Zip the .slpz files (store mode — no compression, slpz is already compressed)
+  const zipPath = path.join(config.jobTempDir, `${jobId}.zip`);
+  const slpzFiles = await fsp.readdir(jobDir);
+  await execFileAsync("zip", ["-0", "-j", zipPath, ...slpzFiles.map((f) => path.join(jobDir, f))], {
     maxBuffer: 50 * 1024 * 1024,
     timeout: slpzTimeoutMs,
     killSignal: "SIGKILL",
   });
 
-  const stat = await fsp.stat(tarPath);
+  const stat = await fsp.stat(zipPath);
 
-  // Clean up the temp directory (keep the tar)
+  // Clean up the temp directory (keep the zip)
   await fsp.rm(jobDir, { recursive: true, force: true });
 
-  return { tarPath, size: stat.size };
+  return { zipPath, size: stat.size };
 }
 
 /**
@@ -129,7 +130,7 @@ export function cleanupJobTemp(jobId: string): void {
     return;
   }
   const jobDir = path.join(config.jobTempDir, jobId);
-  const tarPath = path.join(config.jobTempDir, `${jobId}.tar`);
+  const zipPath = path.join(config.jobTempDir, `${jobId}.zip`);
 
   try {
     if (fs.existsSync(jobDir)) fs.rmSync(jobDir, { recursive: true, force: true });
@@ -137,9 +138,9 @@ export function cleanupJobTemp(jobId: string): void {
     console.error(`Failed to clean job dir ${jobDir}:`, (err as Error).message);
   }
   try {
-    if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
+    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
   } catch (err) {
-    console.error(`Failed to clean tar ${tarPath}:`, (err as Error).message);
+    console.error(`Failed to clean zip ${zipPath}:`, (err as Error).message);
   }
 }
 

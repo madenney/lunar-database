@@ -9,7 +9,7 @@ export const COMPRESS_RATE = 120;
 export interface EstimateResult {
   count: number;
   rawSize: number;
-  estimatedTarSize: number;
+  estimatedZipSize: number;
   estimatedProcessingTimeSec: number;
 }
 
@@ -62,10 +62,10 @@ export async function queryCountAndSize(
  * Calculate estimated sizes and processing time from count + rawSize.
  */
 export function calculateEstimates(count: number, rawSize: number): EstimateResult {
-  const estimatedTarSize = Math.round(rawSize / 8) + count * 1024;
+  const estimatedZipSize = Math.round(rawSize / 8) + count * 128;
   const compressTimeSec = count / COMPRESS_RATE;
-  const uploadTimeSec = estimatedTarSize / (config.estimateUploadSpeedMbps * 125000);
+  const uploadTimeSec = estimatedZipSize / (config.estimateUploadSpeedMbps * 125000);
   const estimatedProcessingTimeSec = Math.round(compressTimeSec + uploadTimeSec);
 
-  return { count, rawSize, estimatedTarSize, estimatedProcessingTimeSec };
+  return { count, rawSize, estimatedZipSize, estimatedProcessingTimeSec };
 }

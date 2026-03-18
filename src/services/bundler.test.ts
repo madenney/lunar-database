@@ -10,11 +10,12 @@ jest.mock("../config", () => ({
     bundlesDir: path.join(os.tmpdir(), "lm-test-bundles-" + process.pid),
     bundleMaxAgeHours: 0, // expire immediately for cleanup test
     minFreeDiskMb: 100,
+    slpzBinary: "slpz",
     slpzTimeoutMinutes: 30,
   },
 }));
 
-// Mock execFile for slpz, tar, df, and du
+// Mock execFile for slpz, zip, df, and du
 jest.mock("child_process", () => ({
   execFile: jest.fn((cmd: string, args: string[], ...rest: any[]) => {
     // Support both (cmd, args, callback) and (cmd, args, opts, callback) signatures
@@ -39,14 +40,12 @@ jest.mock("child_process", () => ({
         }
       }
       callback(null, { stdout: "", stderr: "" });
-    } else if (cmd === "tar") {
-      const cfIndex = args.indexOf("-cf");
-      if (cfIndex !== -1) {
-        const tarPath = args[cfIndex + 1];
-        const sourceDir = args[args.indexOf("-C") + 1];
-        const files = fs.existsSync(sourceDir) ? fs.readdirSync(sourceDir) : [];
-        fs.writeFileSync(tarPath, `tar-mock: ${files.join(",")}`);
-      }
+    } else if (cmd === "zip") {
+      // Simulate zip -0 -j <output.zip> <files...>
+      const zipPath = args[2]; // zip -0 -j <zipPath> ...files
+      const files = args.slice(3);
+      const contents = files.map((f) => path.basename(f)).join(",");
+      fs.writeFileSync(zipPath, `zip-mock: ${contents}`);
       callback(null, { stdout: "", stderr: "" });
     } else if (cmd === "df") {
       // Return plenty of free space (10GB)
@@ -72,13 +71,13 @@ afterAll(() => {
 
 describe("bundler", () => {
   describe("createBundle", () => {
-    it("creates a tar file from a list of .slp paths", async () => {
+    it("creates a zip file from a list of .slp paths", async () => {
       const fixture = path.join(__dirname, "../__fixtures__/test.slp");
       const result = await createBundle([fixture], "aaaaaaaaaaaaaaaaaaaaaaaa");
 
-      expect(result.tarPath).toMatch(/aaaaaaaaaaaaaaaaaaaaaaaa\.tar$/);
+      expect(result.zipPath).toMatch(/aaaaaaaaaaaaaaaaaaaaaaaa\.zip$/);
       expect(result.size).toBeGreaterThan(0);
-      expect(fs.existsSync(result.tarPath)).toBe(true);
+      expect(fs.existsSync(result.zipPath)).toBe(true);
 
       // Clean up
       cleanupJobTemp("aaaaaaaaaaaaaaaaaaaaaaaa");
@@ -106,14 +105,14 @@ describe("bundler", () => {
   });
 
   describe("cleanupJobTemp", () => {
-    it("cleans up job directory and tar file", async () => {
+    it("cleans up job directory and zip file", async () => {
       const fixture = path.join(__dirname, "../__fixtures__/test.slp");
       const result = await createBundle([fixture], "dddddddddddddddddddddddd");
 
-      expect(fs.existsSync(result.tarPath)).toBe(true);
+      expect(fs.existsSync(result.zipPath)).toBe(true);
 
       cleanupJobTemp("dddddddddddddddddddddddd");
-      expect(fs.existsSync(result.tarPath)).toBe(false);
+      expect(fs.existsSync(result.zipPath)).toBe(false);
     });
 
     it("does not throw for non-existent job", () => {
