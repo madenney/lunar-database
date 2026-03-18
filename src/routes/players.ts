@@ -8,29 +8,36 @@ const router = Router();
 router.get("/autocomplete", async (req: Request, res: Response) => {
   try {
     const { q, limit = "10" } = req.query;
-    if (!q || (q as string).length < 1) {
-      res.status(400).json({ error: "Query must be at least 1 character" });
-      return;
-    }
-    if ((q as string).length > 100) {
+    if ((q as string)?.length > 100) {
       res.status(400).json({ error: "Query too long (max 100 characters)" });
       return;
     }
 
-    const limitNum = Math.min(25, Math.max(1, parseInt(limit as string, 10)));
-    const escaped = (q as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const prefixRegex = new RegExp(`^${escaped}`, "i");
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+    const query = (q as string)?.trim() || "";
 
-    const results = await Player.find({
-      $or: [
-        { connectCode: prefixRegex },
-        { displayName: prefixRegex },
-      ],
-    })
-      .sort({ gameCount: -1 })
-      .limit(limitNum)
-      .select("connectCode displayName tag gameCount -_id")
-      .lean();
+    let results;
+    if (query.length === 0) {
+      // No query — return top players by game count
+      results = await Player.find({})
+        .sort({ gameCount: -1 })
+        .limit(limitNum)
+        .select("connectCode displayName tag gameCount -_id")
+        .lean();
+    } else {
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const prefixRegex = new RegExp(`^${escaped}`, "i");
+      results = await Player.find({
+        $or: [
+          { connectCode: prefixRegex },
+          { displayName: prefixRegex },
+        ],
+      })
+        .sort({ gameCount: -1 })
+        .limit(limitNum)
+        .select("connectCode displayName tag gameCount -_id")
+        .lean();
+    }
 
     res.json(results);
   } catch (err) {
