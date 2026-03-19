@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
+import { DownloadEvent } from "../models/DownloadEvent";
 import { getPublicDownloadUrl } from "../services/storage";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
@@ -341,6 +342,15 @@ router.get("/:id/download", async (req: Request, res: Response) => {
 
     // Increment download counter and update last download timestamp
     Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec().catch(() => {});
+
+    // Log download event for analytics
+    DownloadEvent.create({
+      type: "job",
+      jobId: job._id,
+      clientId: clientId || null,
+      bundleSize: job.bundleSize,
+      replayCount: job.replayCount,
+    }).catch(() => {});
 
     const url = getPublicDownloadUrl(job.r2Key);
     res.json({ url });

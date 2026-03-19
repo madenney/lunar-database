@@ -224,8 +224,8 @@ router.get("/jobs", async (req: Request, res: Response) => {
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = Math.min((pageNum - 1) * limitNum, 10000);
+    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const skip = (pageNum - 1) * limitNum;
 
     const sort: Record<string, 1 | -1> = query.status === "pending"
       ? { priority: 1, createdAt: 1 }

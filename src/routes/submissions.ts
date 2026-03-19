@@ -138,8 +138,8 @@ router.get("/", requireAdmin, async (req: Request, res: Response) => {
     if (uploadId) query.uploadId = String(uploadId);
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = Math.min((pageNum - 1) * limitNum, 10000);
+    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const skip = (pageNum - 1) * limitNum;
 
     const [submissions, total] = await Promise.all([
       Submission.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),

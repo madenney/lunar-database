@@ -87,20 +87,6 @@ async function render() {
     kv("Temp disk", `${fmt.bytes(usedBytes)} used / ${fmt.bytes(freeBytes)} free  (${entries} entries)`);
   } catch {}
 
-  // --- Jobs by status ---
-  const jobCounts = await Job.aggregate([
-    { $group: { _id: "$status", count: { $sum: 1 } } },
-  ]);
-  const statusMap = new Map<string, number>(jobCounts.map((j: any) => [j._id, j.count]));
-  const statuses = ["pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled"];
-
-  hd("Jobs");
-  const jobLine = statuses
-    .filter((s) => (statusMap.get(s) || 0) > 0)
-    .map((s) => `${statusColor(s)}${s}${RESET}: ${statusMap.get(s)}`)
-    .join("   ");
-  push(`  ${jobLine || `${DIM}none${RESET}`}`);
-
   // --- Active Jobs ---
   const activeStatuses = ["processing", "compressing", "compressed", "uploading"];
   const activeJobs = await Job.find({ status: { $in: activeStatuses } })
@@ -139,7 +125,7 @@ async function render() {
   }
 
   // --- Pending Queue ---
-  const pendingCount = statusMap.get("pending") || 0;
+  const pendingCount = await Job.countDocuments({ status: "pending" });
   if (pendingCount > 0) {
     hd(`Queue (${pendingCount} pending)`);
     const pending = await Job.find({ status: "pending" })

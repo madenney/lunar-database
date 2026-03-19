@@ -15,7 +15,6 @@ export function parseSlpFile(filePath: string): ParsedReplay {
   const game = new SlippiGame(filePath);
   const settings = game.getSettings();
   const metadata = game.getMetadata();
-  const gameEnd = game.getGameEnd();
 
   const stageId = settings?.stageId ?? null;
   let stageName: string | null = null;
@@ -56,11 +55,5 @@ export function parseSlpFile(filePath: string): ParsedReplay {
 
   const duration = metadata?.lastFrame ?? null;
 
-  let winner: number | null = null;
-  if (gameEnd?.placements) {
-    const first = gameEnd.placements.find((p) => p.position === 0);
-    if (first) winner = first.playerIndex;
-  }
-
-  return { stageId, stageName, startAt, duration, players, winner };
+  return { stageId, stageName, startAt, duration, players, winner: null };
 }

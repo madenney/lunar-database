@@ -1,9 +1,12 @@
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
+import os from "os";
+import { Worker } from "worker_threads";
 import { Replay } from "../models/Replay";
-import { parseSlpFile } from "./slpParser";
 import { config } from "../config";
+
+const WORKER_BATCH = 200; // files per worker message
+const SAVE_BATCH = 1000;  // docs per insertMany
 
 function* walkDir(dir: string): Generator<string> {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -17,9 +20,16 @@ function* walkDir(dir: string): Generator<string> {
   }
 }
 
-function getFolderLabel(filePath: string, rootDir: string): string | null {
-  const rel = path.relative(rootDir, path.dirname(filePath));
-  return rel || null;
+function createWorker(workerPath: string): Worker {
+  return new Worker(workerPath, { execArgv: ["--require", "ts-node/register"] });
+}
+
+function parseViaWorker(worker: Worker, relPaths: string[], rootDir: string): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    worker.once("message", resolve);
+    worker.once("error", reject);
+    worker.postMessage({ relPaths, rootDir });
+  });
 }
 
 export interface CrawlOptions {
@@ -29,111 +39,95 @@ export interface CrawlOptions {
 export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<void> {
   const dir = rootDir || config.slpRootDir;
   const skipDupeCheck = opts.skipDupeCheck ?? false;
-  console.log(`Crawling ${dir}...${skipDupeCheck ? " (skipping dupe check)" : ""}`);
+  const numWorkers = Math.max(1, os.cpus().length - 2); // leave 2 cores for mongo + system
+  console.log(`Crawling ${dir} with ${numWorkers} workers...${skipDupeCheck ? " (skipping dupe check)" : ""}`);
+
+  const workerPath = path.join(__dirname, "crawlWorker.ts");
+  const workers = Array.from({ length: numWorkers }, () => createWorker(workerPath));
 
   let indexed = 0;
-  let skipped = 0;
   let errors = 0;
-  let batch: NonNullable<ReturnType<typeof parseOneFile>>[] = [];
+  let skipped = 0;
+  let saveBuf: any[] = [];
+  let pathBuf: string[] = [];
 
-  // Collect file paths in chunks to batch dupe checks with $in instead of N+1 findOne
-  let pathBuffer: string[] = [];
+  // Round-robin dispatch to workers
+  let workerIdx = 0;
+  const pendingWork: Promise<any[]>[] = [];
 
-  for (const filePath of walkDir(dir)) {
-    pathBuffer.push(filePath);
+  async function flushWorkers() {
+    if (pendingWork.length === 0) return;
+    const results = await Promise.all(pendingWork);
+    pendingWork.length = 0;
 
-    if (pathBuffer.length >= config.crawlerBatchSize) {
-      const result = await processPaths(pathBuffer, dir, skipDupeCheck, batch);
-      skipped += result.skipped;
-      errors += result.errors;
-      batch = result.batch;
+    for (const batch of results) {
+      saveBuf.push(...batch);
+      errors += WORKER_BATCH - batch.length; // rough error count
+    }
 
-      if (batch.length >= config.crawlerBatchSize) {
-        await saveBatch(batch);
-        indexed += batch.length;
-        batch = [];
-        console.log(`Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
-      }
-      pathBuffer = [];
+    while (saveBuf.length >= SAVE_BATCH) {
+      const toSave = saveBuf.splice(0, SAVE_BATCH);
+      await saveBatch(toSave);
+      indexed += toSave.length;
+      console.log(`Indexed: ${indexed}, Errors: ${errors}`);
     }
   }
 
-  // Process remaining paths
-  if (pathBuffer.length > 0) {
-    const result = await processPaths(pathBuffer, dir, skipDupeCheck, batch);
-    skipped += result.skipped;
-    errors += result.errors;
-    batch = result.batch;
+  async function dispatchBatch(paths: string[]) {
+    // Dupe check
+    let toProcess = paths;
+    if (!skipDupeCheck) {
+      const existing = await Replay.find({ filePath: { $in: paths } })
+        .select("filePath").lean();
+      const existingSet = new Set(existing.map((r) => r.filePath));
+      skipped += existingSet.size;
+      toProcess = paths.filter((p) => !existingSet.has(p));
+    }
+
+    if (toProcess.length === 0) return;
+
+    const worker = workers[workerIdx % workers.length];
+    workerIdx++;
+    pendingWork.push(parseViaWorker(worker, toProcess, dir));
+
+    // Flush when all workers are busy
+    if (pendingWork.length >= numWorkers) {
+      await flushWorkers();
+    }
   }
 
-  if (batch.length > 0) {
-    await saveBatch(batch);
-    indexed += batch.length;
+  for (const absolutePath of walkDir(dir)) {
+    pathBuf.push(path.relative(dir, absolutePath));
+
+    if (pathBuf.length >= WORKER_BATCH) {
+      await dispatchBatch(pathBuf);
+      pathBuf = [];
+    }
   }
+
+  // Remaining paths
+  if (pathBuf.length > 0) {
+    await dispatchBatch(pathBuf);
+  }
+
+  // Flush remaining work
+  await flushWorkers();
+
+  if (saveBuf.length > 0) {
+    await saveBatch(saveBuf);
+    indexed += saveBuf.length;
+  }
+
+  // Terminate workers
+  await Promise.all(workers.map((w) => w.terminate()));
 
   console.log(`Done. Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
 }
 
-async function processPaths(
-  paths: string[],
-  rootDir: string,
-  skipDupeCheck: boolean,
-  batch: NonNullable<ReturnType<typeof parseOneFile>>[]
-) {
-  let skipped = 0;
-  let errors = 0;
-  let toProcess = paths;
-
-  if (!skipDupeCheck) {
-    const existing = await Replay.find({ filePath: { $in: paths } })
-      .select("filePath")
-      .lean();
-    const existingSet = new Set(existing.map((r) => r.filePath));
-    skipped = existingSet.size;
-    toProcess = paths.filter((p) => !existingSet.has(p));
-  }
-
-  for (const filePath of toProcess) {
-    const result = parseOneFile(filePath, rootDir);
-    if (result) {
-      batch.push(result);
-    } else {
-      errors++;
-    }
-  }
-
-  return { batch, skipped, errors };
-}
-
-function parseOneFile(filePath: string, rootDir: string) {
-  try {
-    const parsed = parseSlpFile(filePath);
-    const stat = fs.statSync(filePath);
-    // Use file size + mtime as a quick hash to avoid reading the full file
-    const fileHash = crypto
-      .createHash("md5")
-      .update(`${stat.size}-${stat.mtimeMs}`)
-      .digest("hex");
-
-    return {
-      filePath,
-      fileHash,
-      fileSize: stat.size,
-      folderLabel: getFolderLabel(filePath, rootDir),
-      ...parsed,
-      indexedAt: new Date(),
-    };
-  } catch (err) {
-    console.error(`Failed to parse ${filePath}:`, (err as Error).message);
-    return null;
-  }
-}
-
-async function saveBatch(batch: NonNullable<ReturnType<typeof parseOneFile>>[]) {
+async function saveBatch(batch: any[]) {
   try {
     await Replay.insertMany(batch, { ordered: false });
   } catch (err: any) {
-    // Duplicate key errors (code 11000) are expected from concurrent runs or re-crawls
     if (err.code !== 11000) {
       throw err;
     }

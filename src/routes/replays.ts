@@ -3,6 +3,7 @@ import path from "path";
 import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
 import { config } from "../config";
+import { DownloadEvent } from "../models/DownloadEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
@@ -71,8 +72,8 @@ router.get("/", async (req: Request, res: Response) => {
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
-    const skip = Math.min((pageNum - 1) * limitNum, 10000);
+    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
       Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).lean(),
@@ -121,11 +122,21 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       res.status(404).json({ error: "Replay not found" });
       return;
     }
-    const resolved = path.resolve(replay.filePath);
-    if (!resolved.startsWith(path.resolve(config.slpRootDir))) {
+    const resolved = path.resolve(config.slpRootDir, replay.filePath);
+    if (!resolved.startsWith(path.resolve(config.slpRootDir) + path.sep)) {
       res.status(403).json({ error: "File path outside allowed directory" });
       return;
     }
+    // Log download event for analytics
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    DownloadEvent.create({
+      type: "replay",
+      replayId: replay._id,
+      clientId: clientId || null,
+      bundleSize: replay.fileSize || null,
+      replayCount: 1,
+    }).catch(() => {});
+
     res.download(resolved, path.basename(resolved));
   } catch (err) {
     sendError(res, err);

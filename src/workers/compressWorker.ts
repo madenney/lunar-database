@@ -51,8 +51,8 @@ export async function processNextCompression(): Promise<boolean> {
     const allReplays = await Replay.find(query).select("filePath fileSize").lean();
     const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
     const filePaths = replays
-      .map((r) => r.filePath)
-      .filter((fp) => path.resolve(fp).startsWith(resolvedRoot + path.sep));
+      .map((r) => path.join(resolvedRoot, r.filePath))
+      .filter((fp) => fp.startsWith(resolvedRoot + path.sep));
 
     if (filePaths.length === 0) {
       job.status = "failed";
