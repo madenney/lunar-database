@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { config } from "../config";
@@ -11,6 +12,9 @@ import { sendError } from "../utils/sendError";
 import { startCompressor, stopCompressor, isCompressorRunning, getCompressorJobId } from "../workers/compressWorker";
 import { startUploader, stopUploader, isUploaderRunning, getUploaderJobId } from "../workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker, isCleanupRunning } from "../workers/cleanupWorker";
+import { SearchEvent } from "../models/SearchEvent";
+import { DownloadEvent } from "../models/DownloadEvent";
+import { blacklistToken } from "../services/tokenBlacklist";
 import { cleanupExpiredJobs } from "../services/storageCleanup";
 import { deleteFromStorage } from "../services/storage";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
@@ -47,8 +51,9 @@ router.post("/login", async (req: Request, res: Response) => {
       return;
     }
 
+    const jti = crypto.randomUUID();
     const token = jwt.sign(
-      { adminId: admin._id.toString(), username: admin.username },
+      { adminId: admin._id.toString(), username: admin.username, jti },
       config.jwtSecret,
       { expiresIn: config.jwtExpiresIn as any }
     );
@@ -68,6 +73,22 @@ router.use((req: Request, _res: Response, next) => {
     console.log(`[ADMIN] ${req.admin?.username} ${req.method} ${req.path}`);
   }
   next();
+});
+
+// POST /api/admin/logout — revoke the current token
+router.post("/logout", async (req: Request, res: Response) => {
+  try {
+    const payload = req.admin!;
+    if (payload.jti) {
+      // Decode to get expiry so the blacklist entry auto-cleans
+      const decoded = jwt.decode(req.headers.authorization!.slice(7)) as jwt.JwtPayload;
+      const expiresAt = decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await blacklistToken(payload.jti, expiresAt);
+    }
+    res.json({ message: "Logged out" });
+  } catch (err) {
+    sendError(res, err);
+  }
 });
 
 // GET /api/admin/status — system health, worker state, DB stats, disk usage
@@ -224,7 +245,7 @@ router.get("/jobs", async (req: Request, res: Response) => {
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
     const skip = (pageNum - 1) * limitNum;
 
     const sort: Record<string, 1 | -1> = query.status === "pending"
@@ -464,6 +485,285 @@ router.post("/temp/cleanup", async (req: Request, res: Response) => {
       remaining: disk.entries,
       usedMb: Math.round(disk.usedBytes / (1024 * 1024)),
       freeMb: Math.round(disk.freeBytes / (1024 * 1024)),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// ── Analytics ──────────────────────────────────────────────────────────
+
+function buildDateFilter(startDate?: string, endDate?: string) {
+  const filter: Record<string, any> = {};
+  if (startDate) {
+    const d = new Date(startDate);
+    if (!isNaN(d.getTime())) filter.$gte = d;
+  }
+  if (endDate) {
+    const d = new Date(endDate);
+    if (!isNaN(d.getTime())) filter.$lte = d;
+  }
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
+// GET /api/admin/analytics/overview — high-level stats for a time range
+router.get("/analytics/overview", async (req: Request, res: Response) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
+
+    const [searchStats, downloadStats] = await Promise.all([
+      SearchEvent.aggregate([
+        { $match: dateMatch },
+        {
+          $group: {
+            _id: "$type",
+            count: { $sum: 1 },
+            uniqueClients: { $addToSet: "$clientId" },
+          },
+        },
+      ]),
+      DownloadEvent.aggregate([
+        { $match: dateMatch },
+        {
+          $group: {
+            _id: "$type",
+            count: { $sum: 1 },
+            totalBytes: { $sum: "$bundleSize" },
+            totalReplays: { $sum: "$replayCount" },
+            uniqueClients: { $addToSet: "$clientId" },
+          },
+        },
+      ]),
+    ]);
+
+    const searches: Record<string, any> = {};
+    const allSearchClients = new Set<string>();
+    for (const s of searchStats) {
+      searches[s._id] = { count: s.count, uniqueClients: s.uniqueClients.filter(Boolean).length };
+      for (const c of s.uniqueClients) if (c) allSearchClients.add(c);
+    }
+
+    const downloads: Record<string, any> = {};
+    const allDownloadClients = new Set<string>();
+    for (const d of downloadStats) {
+      downloads[d._id] = {
+        count: d.count,
+        totalBytes: d.totalBytes,
+        totalReplays: d.totalReplays,
+        uniqueClients: d.uniqueClients.filter(Boolean).length,
+      };
+      for (const c of d.uniqueClients) if (c) allDownloadClients.add(c);
+    }
+
+    res.json({
+      searches,
+      downloads,
+      totalSearchEvents: searchStats.reduce((sum, s) => sum + s.count, 0),
+      totalDownloadEvents: downloadStats.reduce((sum, d) => sum + d.count, 0),
+      uniqueSearchClients: allSearchClients.size,
+      uniqueDownloadClients: allDownloadClients.size,
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/analytics/activity — daily event counts over time
+router.get("/analytics/activity", async (req: Request, res: Response) => {
+  try {
+    const { startDate, endDate, granularity = "day" } = req.query;
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
+
+    const dateFormat = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
+
+    const [searchActivity, downloadActivity] = await Promise.all([
+      SearchEvent.aggregate([
+        { $match: dateMatch },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: dateFormat, date: "$createdAt" } },
+              type: "$type",
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { "_id.date": 1 } },
+      ]),
+      DownloadEvent.aggregate([
+        { $match: dateMatch },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: dateFormat, date: "$createdAt" } },
+              type: "$type",
+            },
+            count: { $sum: 1 },
+            totalBytes: { $sum: "$bundleSize" },
+          },
+        },
+        { $sort: { "_id.date": 1 } },
+      ]),
+    ]);
+
+    res.json({
+      searches: searchActivity.map((r) => ({ date: r._id.date, type: r._id.type, count: r.count })),
+      downloads: downloadActivity.map((r) => ({
+        date: r._id.date,
+        type: r._id.type,
+        count: r.count,
+        totalBytes: r.totalBytes,
+      })),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/analytics/top-searches — most popular search filters and player queries
+router.get("/analytics/top-searches", async (req: Request, res: Response) => {
+  try {
+    const { startDate, endDate, limit = "10" } = req.query;
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+
+    const [topConnectCodes, topCharacters, topStages, topPlayerQueries, zeroResultSearches] = await Promise.all([
+      // Top connect codes searched
+      SearchEvent.aggregate([
+        { $match: { ...dateMatch, type: { $in: ["search", "estimate"] } } },
+        {
+          $project: {
+            codes: {
+              $filter: {
+                input: [
+                  "$filters.p1ConnectCode",
+                  "$filters.p2ConnectCode",
+                ],
+                cond: { $ne: ["$$this", null] },
+              },
+            },
+          },
+        },
+        { $unwind: "$codes" },
+        { $group: { _id: "$codes", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limitNum },
+      ]),
+      // Top characters searched
+      SearchEvent.aggregate([
+        { $match: { ...dateMatch, type: { $in: ["search", "estimate"] } } },
+        {
+          $project: {
+            chars: {
+              $filter: {
+                input: [
+                  "$filters.p1CharacterId",
+                  "$filters.p2CharacterId",
+                ],
+                cond: { $ne: ["$$this", null] },
+              },
+            },
+          },
+        },
+        { $unwind: "$chars" },
+        { $group: { _id: "$chars", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limitNum },
+      ]),
+      // Top stages searched
+      SearchEvent.aggregate([
+        { $match: { ...dateMatch, type: { $in: ["search", "estimate"] }, "filters.stageId": { $ne: null } } },
+        { $group: { _id: "$filters.stageId", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limitNum },
+      ]),
+      // Top player search queries
+      SearchEvent.aggregate([
+        { $match: { ...dateMatch, type: "player_search", query: { $ne: null } } },
+        { $group: { _id: { $toLower: "$query" }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limitNum },
+      ]),
+      // Searches that returned 0 results
+      SearchEvent.aggregate([
+        { $match: { ...dateMatch, resultCount: 0 } },
+        {
+          $group: {
+            _id: "$type",
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+    res.json({
+      topConnectCodes: topConnectCodes.map((r) => ({ connectCode: r._id, count: r.count })),
+      topCharacters: topCharacters.map((r) => ({ characterId: r._id, count: r.count })),
+      topStages: topStages.map((r) => ({ stageId: r._id, count: r.count })),
+      topPlayerQueries: topPlayerQueries.map((r) => ({ query: r._id, count: r.count })),
+      zeroResultSearches: zeroResultSearches.reduce((acc, r) => { acc[r._id] = r.count; return acc; }, {} as Record<string, number>),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/analytics/searches — paginated search event log
+router.get("/analytics/searches", async (req: Request, res: Response) => {
+  try {
+    const { type, clientId, startDate, endDate, page = "1", limit = "50" } = req.query;
+    const query: Record<string, any> = {};
+
+    if (type) query.type = String(type);
+    if (clientId) query.clientId = String(clientId);
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    if (dateFilter) query.createdAt = dateFilter;
+
+    const pageNum = Math.max(1, parseInt(page as string, 10));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [events, total] = await Promise.all([
+      SearchEvent.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      SearchEvent.countDocuments(query),
+    ]);
+
+    res.json({
+      events,
+      pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/analytics/downloads — paginated download event log
+router.get("/analytics/downloads", async (req: Request, res: Response) => {
+  try {
+    const { type, clientId, startDate, endDate, page = "1", limit = "50" } = req.query;
+    const query: Record<string, any> = {};
+
+    if (type) query.type = String(type);
+    if (clientId) query.clientId = String(clientId);
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    if (dateFilter) query.createdAt = dateFilter;
+
+    const pageNum = Math.max(1, parseInt(page as string, 10));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [events, total] = await Promise.all([
+      DownloadEvent.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      DownloadEvent.countDocuments(query),
+    ]);
+
+    res.json({
+      events,
+      pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
     });
   } catch (err) {
     sendError(res, err);

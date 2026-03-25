@@ -4,14 +4,27 @@ import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
 import { config } from "../config";
 import { DownloadEvent } from "../models/DownloadEvent";
+import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 
 const router = Router();
 
+const searchLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many search requests, please try again later" },
+});
+
+const estimateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: "Too many estimate requests, please try again later" },
+});
+
 // POST /api/replays/estimate — estimate count, size, and ETA for a filter
-router.post("/estimate", async (req: Request, res: Response) => {
+router.post("/estimate", estimateLimiter, async (req: Request, res: Response) => {
   try {
     const params: ReplaySearchParams = req.body;
 
@@ -24,6 +37,15 @@ router.post("/estimate", async (req: Request, res: Response) => {
 
     const { count, rawSize, totalDurationFrames } = await queryCountAndSize(params, { includeDuration: true });
     const estimates = calculateEstimates(count, rawSize);
+
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    SearchEvent.create({
+      type: "estimate",
+      clientId: clientId || null,
+      filters: params,
+      estimatedCount: count,
+      estimatedSize: rawSize,
+    }).catch(() => {});
 
     res.json({
       replayCount: count,
@@ -39,7 +61,7 @@ router.post("/estimate", async (req: Request, res: Response) => {
 });
 
 // GET /api/replays — search/filter replays
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", searchLimiter, async (req: Request, res: Response) => {
   try {
     const {
       sort,
@@ -72,13 +94,23 @@ router.get("/", async (req: Request, res: Response) => {
     }
 
     const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
-      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).lean(),
-      Replay.countDocuments(finalQuery),
+      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
+      Replay.countDocuments(finalQuery).maxTimeMS(10000),
     ]);
+
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    SearchEvent.create({
+      type: "search",
+      clientId: clientId || null,
+      filters: params,
+      resultCount: total,
+      page: pageNum,
+      limit: limitNum,
+    }).catch(() => {});
 
     res.json({
       replays,

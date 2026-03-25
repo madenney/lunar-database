@@ -10,6 +10,7 @@ import { cleanupJobTemp, cleanupOrphanedTemp } from "./services/bundler";
 import { startCompressor, stopCompressor } from "./workers/compressWorker";
 import { startUploader, stopUploader } from "./workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
+import { startHealthMonitor, stopHealthMonitor } from "./services/healthMonitor";
 import replayRoutes from "./routes/replays";
 import jobRoutes from "./routes/jobs";
 import statsRoutes from "./routes/stats";
@@ -100,8 +101,8 @@ async function main() {
   // Health check
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
-  const server = app.listen(config.port, () => {
-    console.log(`Server listening on port ${config.port}`);
+  const server = app.listen(config.port, "127.0.0.1", () => {
+    console.log(`Server listening on 127.0.0.1:${config.port}`);
   });
 
   // Recover jobs left in intermediate states from a previous crash
@@ -117,6 +118,7 @@ async function main() {
   startCompressor();
   startUploader();
   startCleanupWorker();
+  startHealthMonitor();
 
   // Graceful shutdown
   let shuttingDown = false;
@@ -128,6 +130,7 @@ async function main() {
     stopCompressor();
     stopUploader();
     stopCleanupWorker();
+    stopHealthMonitor();
 
     server.close(() => {
       console.log("HTTP server closed");

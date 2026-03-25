@@ -14,6 +14,7 @@ Internal admin endpoints for managing the Lunar Melee replay archive. These are 
 - [Job Management](#job-management)
 - [Temp Storage](#temp-storage)
 - [Submissions](#submissions)
+- [Analytics](#analytics)
 
 ---
 
@@ -57,9 +58,19 @@ All other admin endpoints require the JWT in the `Authorization` header:
 Authorization: Bearer <token>
 ```
 
-**Response** `401` — `{ "error": "Authentication required" }` (missing header) or `{ "error": "Invalid or expired token" }` (bad/expired JWT)
+**Response** `401` — `{ "error": "Authentication required" }` (missing header) or `{ "error": "Invalid or expired token" }` (bad/expired JWT) or `{ "error": "Token has been revoked" }` (logged out)
 
 Admin accounts are created via CLI: `npm run create-admin <username> <password>`
+
+### Logout
+
+```
+POST /api/admin/logout
+```
+
+Revoke the current JWT token. The token is added to a server-side blacklist and can no longer be used. Blacklisted tokens are automatically cleaned up after they expire.
+
+**Response** `200` — `{ "message": "Logged out" }`
 
 ---
 
@@ -649,3 +660,252 @@ Reject a pending submission and delete the file from the airlock.
 **Response** `400` — `{ "error": "Submission already rejected" }` (or `approved`)
 
 **Response** `404` — `{ "error": "Submission not found" }`
+
+---
+
+## Analytics
+
+Endpoints for querying search and download event data. All analytics endpoints require admin auth.
+
+No IP addresses or user agents are stored — only `clientId` (anonymous UUID from `X-Client-Id` header).
+
+### Overview
+
+```
+GET /api/admin/analytics/overview
+```
+
+High-level summary of all search and download activity, optionally filtered to a date range.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+
+**Response** `200`
+
+```json
+{
+  "searches": {
+    "search": { "count": 1520, "uniqueClients": 84 },
+    "estimate": { "count": 430, "uniqueClients": 62 },
+    "player_search": { "count": 890, "uniqueClients": 71 }
+  },
+  "downloads": {
+    "job": { "count": 210, "totalBytes": 53687091200, "totalReplays": 42000, "uniqueClients": 55 },
+    "replay": { "count": 85, "totalBytes": 8388608, "totalReplays": 85, "uniqueClients": 30 }
+  },
+  "totalSearchEvents": 2840,
+  "totalDownloadEvents": 295,
+  "uniqueSearchClients": 102,
+  "uniqueDownloadClients": 67
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `searches` | object | Event counts and unique clients, keyed by type (`search`, `estimate`, `player_search`). |
+| `downloads` | object | Event counts, bytes transferred, replays served, and unique clients, keyed by type (`job`, `replay`). |
+| `totalSearchEvents` | number | Sum of all search event types. |
+| `totalDownloadEvents` | number | Sum of all download event types. |
+| `uniqueSearchClients` | number | Distinct client IDs across all search types. |
+| `uniqueDownloadClients` | number | Distinct client IDs across all download types. |
+
+---
+
+### Activity Over Time
+
+```
+GET /api/admin/analytics/activity
+```
+
+Daily (or hourly) event counts for charting activity trends.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+| `granularity` | string | `day` | `day` or `hour`. |
+
+**Response** `200`
+
+```json
+{
+  "searches": [
+    { "date": "2026-03-18", "type": "search", "count": 45 },
+    { "date": "2026-03-18", "type": "player_search", "count": 22 },
+    { "date": "2026-03-19", "type": "search", "count": 51 }
+  ],
+  "downloads": [
+    { "date": "2026-03-18", "type": "job", "count": 8, "totalBytes": 2147483648 },
+    { "date": "2026-03-19", "type": "replay", "count": 3, "totalBytes": 294912 }
+  ]
+}
+```
+
+Each entry contains `date` (formatted per granularity), `type`, `count`, and for downloads `totalBytes`.
+
+---
+
+### Top Searches
+
+```
+GET /api/admin/analytics/top-searches
+```
+
+Most popular search filters, player queries, and zero-result searches.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+| `limit` | number | `10` | Number of results per category (max `100`). |
+
+**Response** `200`
+
+```json
+{
+  "topConnectCodes": [
+    { "connectCode": "MANG#0", "count": 89 },
+    { "connectCode": "AKLO#0", "count": 67 }
+  ],
+  "topCharacters": [
+    { "characterId": "20", "count": 142 },
+    { "characterId": "2", "count": 98 }
+  ],
+  "topStages": [
+    { "stageId": "31", "count": 110 },
+    { "stageId": "3", "count": 74 }
+  ],
+  "topPlayerQueries": [
+    { "query": "mango", "count": 45 },
+    { "query": "zain", "count": 38 }
+  ],
+  "zeroResultSearches": {
+    "search": 12,
+    "estimate": 3,
+    "player_search": 8
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `topConnectCodes` | array | Most searched connect codes (from replay search/estimate filters). |
+| `topCharacters` | array | Most searched character IDs. |
+| `topStages` | array | Most searched stage IDs. |
+| `topPlayerQueries` | array | Most searched player name/code queries (case-insensitive). |
+| `zeroResultSearches` | object | Count of searches that returned 0 results, by event type. |
+
+---
+
+### List Search Events
+
+```
+GET /api/admin/analytics/searches
+```
+
+Paginated log of individual search events.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `type` | string | — | Filter by event type: `search`, `estimate`, or `player_search`. |
+| `clientId` | string | — | Filter by client ID. |
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+| `page` | number | `1` | Page number. |
+| `limit` | number | `50` | Results per page (max `200`). |
+
+**Response** `200`
+
+```json
+{
+  "events": [
+    {
+      "_id": "6651a...",
+      "type": "search",
+      "clientId": "uuid-string",
+      "filters": { "p1ConnectCode": "MANG#0", "stageId": "31" },
+      "query": null,
+      "resultCount": 342,
+      "page": 1,
+      "limit": 50,
+      "estimatedSize": null,
+      "estimatedCount": null,
+      "createdAt": "2026-03-19T14:30:00.000Z"
+    },
+    {
+      "_id": "6651b...",
+      "type": "player_search",
+      "clientId": "uuid-string",
+      "filters": null,
+      "query": "mango",
+      "resultCount": 3,
+      "page": null,
+      "limit": null,
+      "estimatedSize": null,
+      "estimatedCount": null,
+      "createdAt": "2026-03-19T14:29:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 2840,
+    "pages": 57
+  }
+}
+```
+
+---
+
+### List Download Events
+
+```
+GET /api/admin/analytics/downloads
+```
+
+Paginated log of individual download events.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `type` | string | — | Filter by download type: `job` or `replay`. |
+| `clientId` | string | — | Filter by client ID. |
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+| `page` | number | `1` | Page number. |
+| `limit` | number | `50` | Results per page (max `200`). |
+
+**Response** `200`
+
+```json
+{
+  "events": [
+    {
+      "_id": "6651a...",
+      "type": "job",
+      "jobId": "6651b...",
+      "replayId": null,
+      "clientId": "uuid-string",
+      "bundleSize": 10836352,
+      "replayCount": 342,
+      "createdAt": "2026-03-19T14:35:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 295,
+    "pages": 6
+  }
+}

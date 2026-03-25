@@ -44,6 +44,12 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const bundlesLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many requests, please try again later" },
+});
+
 const jobCreateLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -153,7 +159,7 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // GET /api/jobs/bundles — public catalog of completed bundles
-router.get("/bundles", async (req: Request, res: Response) => {
+router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
   try {
     const { page = "1", limit = "20" } = req.query;
     const pageNum = Math.max(1, parseInt(page as string, 10));

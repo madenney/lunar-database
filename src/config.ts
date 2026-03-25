@@ -40,10 +40,15 @@ export const config = {
   storageCleanupAfterDays: parseInt(process.env.STORAGE_CLEANUP_AFTER_DAYS || "3", 10),
   storageCleanupIntervalMinutes: parseInt(process.env.STORAGE_CLEANUP_INTERVAL_MINUTES || "60", 10),
 
+  // Alerts
+  gmailAppPassword: process.env.GMAIL_APP_PASSWORD || "",
+  alertEmailFrom: process.env.ALERT_EMAIL_FROM || "",
+  alertEmailTo: process.env.ALERT_EMAIL_TO || "",
+
   // Auth
   get jwtSecret(): string {
     if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
     throw new Error("JWT_SECRET environment variable is required");
   },
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "24h",
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "2h",
 };

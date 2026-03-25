@@ -27,7 +27,7 @@ export async function queryCountAndSize(
 
   if (hasLimits) {
     const selectFields = options?.includeDuration ? "fileSize duration" : "fileSize";
-    const docs = await Replay.find(query).select(selectFields).lean();
+    const docs = await Replay.find(query).select(selectFields).maxTimeMS(15000).lean();
     const limited = applyReplayLimits(docs, maxFiles, maxSizeMb);
     return {
       count: limited.length,
@@ -47,8 +47,8 @@ export async function queryCountAndSize(
   }
 
   const [count, agg] = await Promise.all([
-    Replay.countDocuments(query),
-    Replay.aggregate([{ $match: query }, { $group: groupFields }]),
+    Replay.countDocuments(query).maxTimeMS(15000),
+    Replay.aggregate([{ $match: query }, { $group: groupFields }]).option({ maxTimeMS: 15000 }),
   ]);
 
   return {

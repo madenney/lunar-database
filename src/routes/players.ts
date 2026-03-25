@@ -1,11 +1,19 @@
 import { Router, Request, Response } from "express";
 import { Player } from "../models/Player";
+import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
+import { createRateLimiter } from "../utils/rateLimiter";
 
 const router = Router();
 
+const playerSearchLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many player search requests, please try again later" },
+});
+
 // GET /api/players/autocomplete?q=FOX — fast autocomplete for connect codes and display names
-router.get("/autocomplete", async (req: Request, res: Response) => {
+router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Response) => {
   try {
     const { q, limit = "10" } = req.query;
     if ((q as string)?.length > 100) {
@@ -23,6 +31,7 @@ router.get("/autocomplete", async (req: Request, res: Response) => {
         .sort({ gameCount: -1 })
         .limit(limitNum)
         .select("connectCode displayName tag gameCount -_id")
+        .maxTimeMS(5000)
         .lean();
     } else {
       const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -36,8 +45,17 @@ router.get("/autocomplete", async (req: Request, res: Response) => {
         .sort({ gameCount: -1 })
         .limit(limitNum)
         .select("connectCode displayName tag gameCount -_id")
+        .maxTimeMS(5000)
         .lean();
     }
+
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    SearchEvent.create({
+      type: "player_search",
+      clientId: clientId || null,
+      query: query || null,
+      resultCount: results.length,
+    }).catch(() => {});
 
     res.json(results);
   } catch (err) {
@@ -46,7 +64,7 @@ router.get("/autocomplete", async (req: Request, res: Response) => {
 });
 
 // GET /api/players/search?q=AKLO — search players by connect code or display name
-router.get("/search", async (req: Request, res: Response) => {
+router.get("/search", playerSearchLimiter, async (req: Request, res: Response) => {
   try {
     const { q, limit = "20" } = req.query;
     if (!q || (q as string).length < 2) {
@@ -71,7 +89,16 @@ router.get("/search", async (req: Request, res: Response) => {
       .sort({ gameCount: -1 })
       .limit(limitNum)
       .select("connectCode displayName tag gameCount -_id")
+      .maxTimeMS(5000)
       .lean();
+
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    SearchEvent.create({
+      type: "player_search",
+      clientId: clientId || null,
+      query: (q as string) || null,
+      resultCount: results.length,
+    }).catch(() => {});
 
     res.json(results);
   } catch (err) {

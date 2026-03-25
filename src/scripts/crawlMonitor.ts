@@ -59,16 +59,14 @@ async function render() {
   const push = (s = "") => lines.push(s);
   const kv = (label: string, value: string | number) => push(`  ${String(label).padEnd(22)} ${value}`);
 
-  push(`${BOLD} CRAWL MONITOR${RESET}          ${DIM}${new Date().toLocaleTimeString()}  (ctrl+c to exit)${RESET}`);
+  push(`${BOLD} DB CRAWL${RESET}          ${DIM}${new Date().toLocaleTimeString()}  (ctrl+c to exit)${RESET}`);
   push("");
 
   push(`  ${progressBar(count, TARGET)}`);
   push("");
 
   kv("Replays indexed", `${BOLD}${fmt.num(count)}${RESET} / ~${fmt.num(TARGET)}`);
-  kv("Elapsed", fmt.duration(Math.floor(elapsed)));
-  kv("Rate (overall)", `${GREEN}${fmt.num(Math.round(overallRate))}/s${RESET}`);
-  kv("Rate (recent)", `${CYAN}${fmt.num(Math.round(recentRate))}/s${RESET}`);
+  kv("Rate", `${GREEN}${fmt.num(Math.round(overallRate))}/s${RESET}`);
 
   if (remaining > 0 && overallRate > 0) {
     kv("ETA", `${YELLOW}${fmt.duration(Math.round(etaSec))}${RESET}`);

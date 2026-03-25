@@ -29,14 +29,28 @@ async function createSubmissionFromSlp(
   });
 }
 
+const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024; // 2GB uncompressed limit
+const MAX_EXTRACTED_FILES = 10000;
+
 async function extractZip(upload: InstanceType<typeof Upload>): Promise<number> {
   let count = 0;
   let errors = 0;
+  let totalExtractedBytes = 0;
   const dir = config.airlockDir;
 
   const directory = await unzipper.Open.file(upload.diskPath);
   for (const entry of directory.files) {
     if (entry.type !== "File" || !entry.path.endsWith(".slp")) continue;
+
+    // ZIP bomb protection
+    if (totalExtractedBytes + ((entry as any).uncompressedSize || 0) > MAX_EXTRACTED_BYTES) {
+      console.warn(`Upload ${upload._id}: extraction aborted — would exceed ${MAX_EXTRACTED_BYTES / (1024 * 1024)}MB uncompressed limit`);
+      break;
+    }
+    if (count >= MAX_EXTRACTED_FILES) {
+      console.warn(`Upload ${upload._id}: extraction aborted — would exceed ${MAX_EXTRACTED_FILES} file limit`);
+      break;
+    }
 
     // Guard against ZIP path traversal (e.g. entries containing "../../")
     const basename = path.basename(entry.path);
@@ -56,6 +70,8 @@ async function extractZip(upload: InstanceType<typeof Upload>): Promise<number> 
       });
 
       await createSubmissionFromSlp(destPath, basename, upload.submittedBy, upload._id.toString());
+      const stat = fs.statSync(destPath);
+      totalExtractedBytes += stat.size;
       count++;
     } catch (err) {
       errors++;

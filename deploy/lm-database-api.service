@@ -14,5 +14,16 @@ Environment=NODE_ENV=production
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/matt/.cargo/bin
 EnvironmentFile=/opt/lm-database/.env
 
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Allow writes only to required directories
+ReadWritePaths=/opt/lm-database/logs /tmp/lm-job-temp
+
 [Install]
 WantedBy=multi-user.target
