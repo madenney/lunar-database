@@ -21,7 +21,8 @@ export interface BundleProgressCallback {
 
 /** Check free disk space on the partition containing jobTempDir (in bytes). */
 async function getFreeDiskBytes(): Promise<number> {
-  const { stdout } = await execFileAsync("df", ["-B1", "--output=avail", config.jobTempDir]);
+  const target = fs.existsSync(config.jobTempDir) ? config.jobTempDir : path.dirname(config.jobTempDir);
+  const { stdout } = await execFileAsync("df", ["-B1", "--output=avail", target]);
   const lines = stdout.trim().split("\n");
   return parseInt(lines[lines.length - 1].trim(), 10);
 }
