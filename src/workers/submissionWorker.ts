@@ -42,9 +42,14 @@ async function extractZip(upload: InstanceType<typeof Upload>): Promise<number> 
   for (const entry of directory.files) {
     if (entry.type !== "File" || !entry.path.endsWith(".slp")) continue;
 
-    // ZIP bomb protection
-    if (totalExtractedBytes + ((entry as any).uncompressedSize || 0) > MAX_EXTRACTED_BYTES) {
+    // ZIP bomb protection — check both metadata estimate and running total of actual bytes
+    const declaredSize = (entry as any).uncompressedSize || 0;
+    if (declaredSize > 0 && totalExtractedBytes + declaredSize > MAX_EXTRACTED_BYTES) {
       console.warn(`Upload ${upload._id}: extraction aborted — would exceed ${MAX_EXTRACTED_BYTES / (1024 * 1024)}MB uncompressed limit`);
+      break;
+    }
+    if (totalExtractedBytes > MAX_EXTRACTED_BYTES) {
+      console.warn(`Upload ${upload._id}: extraction aborted — actual extracted bytes exceed ${MAX_EXTRACTED_BYTES / (1024 * 1024)}MB limit`);
       break;
     }
     if (count >= MAX_EXTRACTED_FILES) {

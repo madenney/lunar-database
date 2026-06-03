@@ -39,11 +39,17 @@ export interface IJob extends Document {
   priority: number;
   replayIds: mongoose.Types.ObjectId[];
   replayCount: number;
+  /** Total replays matching the filter ignoring maxFiles/maxSizeMb caps.
+   *  When > replayCount, the bundle was capped and the user is informed. */
+  totalMatched: number | null;
   estimatedSize: number | null;
   estimatedProcessingTime: number | null;
   bundlePath: string | null;
   bundleSize: number | null;
   r2Key: string | null;
+  /** When true, the bundle lives under the no-expiry `archive/` prefix and is
+   *  exempt from storage cleanup. Toggled by the admin pin/unpin actions. */
+  pinned: boolean;
   downloadCount: number;
   lastDownloadedAt: Date | null;
   progress: IJobProgress | null;
@@ -92,13 +98,18 @@ const JobSchema = new Schema<IJob>(
     filter: { type: JobFilterSchema, default: {} },
     createdBy: { type: String, default: null },
     priority: { type: Number, default: 0 },
-    replayIds: [{ type: Schema.Types.ObjectId, ref: "Replay" }],
+    replayIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "Replay" }],
+      validate: [(v: any[]) => v.length <= 50000, "replayIds exceeds maximum of 50,000"],
+    },
     replayCount: { type: Number, default: 0 },
+    totalMatched: { type: Number, default: null },
     estimatedSize: { type: Number, default: null },
     estimatedProcessingTime: { type: Number, default: null },
     bundlePath: { type: String, default: null },
     bundleSize: { type: Number, default: null },
     r2Key: { type: String, default: null },
+    pinned: { type: Boolean, default: false },
     downloadCount: { type: Number, default: 0 },
     lastDownloadedAt: { type: Date, default: null },
     progress: { type: JobProgressSchema, default: null },

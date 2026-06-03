@@ -5,9 +5,6 @@ export const config = {
   mongoUri: process.env.MONGODB_URI || "mongodb://localhost:27017/lm-database",
   port: parseInt(process.env.PORT || "3000", 10),
   slpRootDir: process.env.SLP_ROOT_DIR || "/data/slp",
-  bundlesDir: process.env.BUNDLES_DIR || "/data/bundles",
-  bundleMaxAgeHours: parseInt(process.env.BUNDLE_MAX_AGE_HOURS || "72", 10),
-  crawlerBatchSize: parseInt(process.env.CRAWLER_BATCH_SIZE || "100", 10),
   airlockDir: process.env.AIRLOCK_DIR || "/data/airlock",
 
   // S3-compatible storage (Backblaze B2)
@@ -16,20 +13,18 @@ export const config = {
   s3AccessKeyId: process.env.S3_ACCESS_KEY_ID || "",
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY || "",
   s3BucketName: process.env.S3_BUCKET_NAME || "lm-replays",
-  publicDownloadBase: process.env.PUBLIC_DOWNLOAD_BASE || "",
   get s3Configured(): boolean {
     return !!(this.s3Endpoint && this.s3AccessKeyId && this.s3SecretAccessKey);
   },
 
   // Job settings
-  jobBundleExpiryHours: parseInt(process.env.JOB_BUNDLE_EXPIRY_HOURS || "48", 10),
-  jobTempDir: process.env.JOB_TEMP_DIR || "/tmp/lm-job-temp",
+  jobTempDir: process.env.JOB_TEMP_DIR || "/var/lib/lm-database/temp",
   jobMaxConcurrentPerClient: parseInt(process.env.JOB_MAX_CONCURRENT_PER_CLIENT || "3", 10),
   jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "50", 10),
 
   // Worker safety limits
   jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "60", 10),
-  slpzBinary: process.env.SLPZ_BINARY || "/home/matt/.cargo/bin/slpz",
+  slpzBinary: process.env.SLPZ_BINARY || "/usr/local/bin/slpz",
   slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
 
@@ -50,5 +45,5 @@ export const config = {
     if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
     throw new Error("JWT_SECRET environment variable is required");
   },
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "2h",
+  jwtExpiresIn: (process.env.JWT_EXPIRES_IN || "2h") as import("ms").StringValue,
 };

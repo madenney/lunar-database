@@ -5,25 +5,33 @@ Wants=mongod.service
 
 [Service]
 Type=simple
-User=matt
+User=lm-database
+Group=lm-database
 WorkingDirectory=/opt/lm-database
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/matt/.cargo/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cargo/bin
 EnvironmentFile=/opt/lm-database/.env
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+UMask=0077
+
 # Allow writes only to required directories
-ReadWritePaths=/opt/lm-database/logs /tmp/lm-job-temp
+ReadWritePaths=/var/lib/lm-database/temp /opt/lm-database/logs
 
 [Install]
 WantedBy=multi-user.target

@@ -314,6 +314,7 @@ GET /api/admin/jobs
       "bundlePath": "/tmp/jobs/6651a.zip",
       "bundleSize": 10836352,
       "r2Key": "jobs/6651a.zip",
+      "pinned": false,
       "progress": null,
       "error": null,
       "startedAt": "2024-06-01T12:00:01.000Z",
@@ -331,7 +332,7 @@ GET /api/admin/jobs
 }
 ```
 
-Note: Admin list returns the full job document including `r2Key`, `bundlePath`, `replayIds`, and `createdBy`. When filtering by `status=pending`, results are sorted by `{ priority: 1, createdAt: 1 }` (queue order) instead of newest-first.
+Note: Admin list returns the full job document including `r2Key`, `bundlePath`, `replayIds`, `createdBy`, and `pinned` (whether the bundle is permanently retained — see [Pin Bundle](#pin-bundle)). When filtering by `status=pending`, results are sorted by `{ priority: 1, createdAt: 1 }` (queue order) instead of newest-first.
 
 ---
 
@@ -418,6 +419,62 @@ Reset a `failed` or `cancelled` job back to `pending` so it gets picked up again
 ```
 
 **Response** `400` — `{ "error": "Can only retry failed or cancelled jobs" }`
+
+**Response** `404` — `{ "error": "Job not found" }`
+
+---
+
+### Pin Bundle
+
+```
+POST /api/admin/jobs/:id/pin
+```
+
+Mark a completed bundle as **permanent** so it is never auto-deleted. Bundles
+normally expire ~3 days after completion (they live under the `jobs/` storage
+prefix, which has a lifecycle-expiry rule). Pinning moves the object to the
+`archive/` prefix (which has no expiry rule) and sets `pinned: true`, so storage
+cleanup skips it and the download stays available indefinitely. Idempotent —
+pinning an already-pinned job is a no-op.
+
+Only a `completed` job with a live download (`r2Key` set / `downloadReady: true`)
+can be pinned.
+
+**Response** `200`
+
+```json
+{
+  "jobId": "6651a...",
+  "pinned": true,
+  "r2Key": "archive/6651a....zip"
+}
+```
+
+**Response** `400` — `{ "error": "Only completed bundles with a live download can be pinned" }`
+
+**Response** `404` — `{ "error": "Job not found" }`
+
+---
+
+### Unpin Bundle
+
+```
+POST /api/admin/jobs/:id/unpin
+```
+
+Reverse a pin: moves the object back under the ephemeral `jobs/` prefix and sets
+`pinned: false`, so it resumes normal expiry (~3 days from completion — may be
+deleted on the next cleanup pass if it is already older than that). Idempotent.
+
+**Response** `200`
+
+```json
+{
+  "jobId": "6651a...",
+  "pinned": false,
+  "r2Key": "jobs/6651a....zip"
+}
+```
 
 **Response** `404` — `{ "error": "Job not found" }`
 

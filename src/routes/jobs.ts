@@ -1,18 +1,24 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
 import { DownloadEvent } from "../models/DownloadEvent";
-import { getPublicDownloadUrl } from "../services/storage";
+import { getPresignedDownloadUrl } from "../services/storage";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { config } from "../config";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
+import { buildReplaySearchQuery } from "../services/replaySearchQuery";
+import { Replay } from "../models/Replay";
+import { SAFE_JOB_ERROR_MESSAGES } from "../utils/sanitizeError";
 
 const router = Router();
 
-/** Errors safe to show to API consumers as-is */
-const USER_FACING_ERRORS = [
-  "No replays matched the filter",
-];
+/**
+ * Errors safe to show to API consumers as-is. These are the already-sanitized
+ * messages the worker stores (see SAFE_JOB_ERROR_MESSAGES), plus any errors
+ * raised directly by this route. Keeping the worker's list as the source of
+ * truth means new failure reasons surface to users automatically.
+ */
+const USER_FACING_ERRORS = [...SAFE_JOB_ERROR_MESSAGES];
 
 /** Return a generic message for internal errors, pass through user-facing ones */
 function sanitizeJobError(error: string): string {
@@ -20,17 +26,25 @@ function sanitizeJobError(error: string): string {
   return "Server error — please try again later";
 }
 
+const MAX_FILTER_STRING_LEN = 100;
+
+function safeString(val: unknown, maxLen = MAX_FILTER_STRING_LEN): string | undefined {
+  if (val == null) return undefined;
+  if (typeof val !== "string" && typeof val !== "number") return undefined;
+  return String(val).slice(0, maxLen);
+}
+
 export function parseFilter(body: Record<string, any>): IJobFilter {
   const filter: IJobFilter = {};
-  if (body.p1ConnectCode) filter.p1ConnectCode = String(body.p1ConnectCode);
-  if (body.p1CharacterId != null) filter.p1CharacterId = String(body.p1CharacterId);
-  if (body.p1DisplayName) filter.p1DisplayName = String(body.p1DisplayName);
-  if (body.p2ConnectCode) filter.p2ConnectCode = String(body.p2ConnectCode);
-  if (body.p2CharacterId != null) filter.p2CharacterId = String(body.p2CharacterId);
-  if (body.p2DisplayName) filter.p2DisplayName = String(body.p2DisplayName);
-  if (body.stageId != null) filter.stageId = String(body.stageId);
-  if (body.startDate) filter.startDate = String(body.startDate);
-  if (body.endDate) filter.endDate = String(body.endDate);
+  const p1cc = safeString(body.p1ConnectCode); if (p1cc) filter.p1ConnectCode = p1cc;
+  const p1ci = safeString(body.p1CharacterId); if (p1ci) filter.p1CharacterId = p1ci;
+  const p1dn = safeString(body.p1DisplayName); if (p1dn) filter.p1DisplayName = p1dn;
+  const p2cc = safeString(body.p2ConnectCode); if (p2cc) filter.p2ConnectCode = p2cc;
+  const p2ci = safeString(body.p2CharacterId); if (p2ci) filter.p2CharacterId = p2ci;
+  const p2dn = safeString(body.p2DisplayName); if (p2dn) filter.p2DisplayName = p2dn;
+  const sid = safeString(body.stageId); if (sid) filter.stageId = sid;
+  const sd = safeString(body.startDate); if (sd) filter.startDate = sd;
+  const ed = safeString(body.endDate); if (ed) filter.endDate = ed;
   if (body.maxFiles != null) {
     const n = Number(body.maxFiles);
     if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.min(Math.floor(n), 50000);
@@ -54,6 +68,30 @@ const jobCreateLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
   max: 5,
   message: { error: "Too many job creation requests, please try again later" },
+});
+
+const jobListLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many requests, please try again later" },
+});
+
+const jobStatusLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
+const jobDeleteLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Too many delete requests, please try again later" },
+});
+
+const jobDownloadLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: "Too many download requests, please try again later" },
 });
 
 // POST /api/jobs — create a download job
@@ -105,10 +143,18 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
 
     const estimates = calculateEstimates(count, rawSize);
 
+    // When a file/size cap is set, `count` is already capped. Get the uncapped
+    // total so we can tell the user their bundle was trimmed.
+    let totalMatched = count;
+    if (filter.maxFiles != null || filter.maxSizeMb != null) {
+      totalMatched = await Replay.countDocuments(buildReplaySearchQuery(filter)).maxTimeMS(15000);
+    }
+
     const job = await Job.create({
       filter,
       createdBy: clientId || null,
       replayCount: count,
+      totalMatched,
       estimatedSize: rawSize,
       estimatedProcessingTime: estimates.estimatedProcessingTimeSec,
     });
@@ -120,7 +166,7 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
 });
 
 // GET /api/jobs — list jobs for a clientId (paginated)
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", jobListLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId) {
@@ -129,8 +175,10 @@ router.get("/", async (req: Request, res: Response) => {
     }
 
     const { page = "1", limit = "20" } = req.query;
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
     const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const query = { createdBy: clientId };
@@ -162,8 +210,10 @@ router.get("/", async (req: Request, res: Response) => {
 router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
   try {
     const { page = "1", limit = "20" } = req.query;
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
     const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
     const query = { status: "completed", r2Key: { $ne: null } };
@@ -187,7 +237,7 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
 });
 
 // DELETE /api/jobs/:id — user cancels own job (must match createdBy, only pending/processing)
-router.delete("/:id", async (req: Request, res: Response) => {
+router.delete("/:id", jobDeleteLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId) {
@@ -222,7 +272,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
 });
 
 // GET /api/jobs/:id — check job status
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
@@ -230,14 +280,10 @@ router.get("/:id", async (req: Request, res: Response) => {
       return;
     }
 
-    // Ownership check — non-owners get limited info only
+    // Ownership check — require matching clientId
     const clientId = req.headers["x-client-id"] as string | undefined;
-    if (job.createdBy && job.createdBy !== clientId) {
-      res.json({
-        jobId: job._id,
-        status: job.status,
-        downloadReady: job.status === "completed" && !!job.r2Key,
-      });
+    if (!clientId || job.createdBy !== clientId) {
+      res.status(403).json({ error: "Not authorized to view this job" });
       return;
     }
 
@@ -306,9 +352,12 @@ router.get("/:id", async (req: Request, res: Response) => {
       jobId: job._id,
       status: job.status,
       replayCount: job.replayCount,
+      totalMatched: job.totalMatched,
+      capped: job.totalMatched != null && job.totalMatched > job.replayCount,
       estimatedSize: job.estimatedSize,
       bundleSize: job.bundleSize,
       downloadReady: job.status === "completed" && !!job.r2Key,
+      pinned: job.pinned,
       downloadCount: job.downloadCount,
       progress: job.progress,
       error: job.error ? sanitizeJobError(job.error) : null,
@@ -325,8 +374,8 @@ router.get("/:id", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/jobs/:id/download — return public download URL
-router.get("/:id/download", async (req: Request, res: Response) => {
+// GET /api/jobs/:id/download — return presigned download URL
+router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
@@ -334,9 +383,9 @@ router.get("/:id/download", async (req: Request, res: Response) => {
       return;
     }
 
-    // Ownership check — only the job creator can download
+    // Ownership check — require matching clientId
     const clientId = req.headers["x-client-id"] as string | undefined;
-    if (job.createdBy && job.createdBy !== clientId) {
+    if (!clientId || job.createdBy !== clientId) {
       res.status(403).json({ error: "Not authorized to download this job" });
       return;
     }
@@ -358,7 +407,7 @@ router.get("/:id/download", async (req: Request, res: Response) => {
       replayCount: job.replayCount,
     }).catch(() => {});
 
-    const url = getPublicDownloadUrl(job.r2Key);
+    const url = await getPresignedDownloadUrl(job.r2Key);
     res.json({ url });
   } catch (err) {
     sendError(res, err);

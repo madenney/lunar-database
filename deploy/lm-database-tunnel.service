@@ -5,10 +5,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=matt
+User=lm-database
+Group=lm-database
 ExecStart=/usr/local/bin/cloudflared tunnel --config /etc/cloudflared/config.yml run lm-database
 Restart=always
 RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

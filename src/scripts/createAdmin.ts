@@ -70,17 +70,16 @@ async function main() {
 
   await connectDb();
 
+  const passwordHash = await hashPassword(password);
   const existing = await Admin.findOne({ username });
   if (existing) {
-    console.error(`Admin "${username}" already exists`);
-    await mongoose.disconnect();
-    process.exit(1);
+    existing.passwordHash = passwordHash;
+    await existing.save();
+    console.log(`Admin "${username}" password updated`);
+  } else {
+    await Admin.create({ username, passwordHash });
+    console.log(`Admin "${username}" created`);
   }
-
-  const passwordHash = await hashPassword(password);
-  await Admin.create({ username, passwordHash });
-
-  console.log(`Admin "${username}" created successfully`);
   await mongoose.disconnect();
 }
 

@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import fs from "fs";
 import path from "path";
 import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
@@ -8,6 +9,7 @@ import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
+import { sanitizeFilters } from "../utils/sanitizeFilters";
 
 const router = Router();
 
@@ -42,7 +44,7 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
     SearchEvent.create({
       type: "estimate",
       clientId: clientId || null,
-      filters: params,
+      filters: sanitizeFilters(params),
       estimatedCount: count,
       estimatedSize: rawSize,
     }).catch(() => {});
@@ -93,8 +95,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       }
     }
 
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 200;
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
@@ -106,7 +110,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     SearchEvent.create({
       type: "search",
       clientId: clientId || null,
-      filters: params,
+      filters: sanitizeFilters(params),
       resultCount: total,
       page: pageNum,
       limit: limitNum,
@@ -126,8 +130,14 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
   }
 });
 
+const replayGetLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
 // GET /api/replays/:id
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", replayGetLimiter, async (req: Request, res: Response) => {
   try {
     const replay = await Replay.findById(req.params.id).select("-filePath").lean();
     if (!replay) {
@@ -154,8 +164,9 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       res.status(404).json({ error: "Replay not found" });
       return;
     }
-    const resolved = path.resolve(config.slpRootDir, replay.filePath);
-    if (!resolved.startsWith(path.resolve(config.slpRootDir) + path.sep)) {
+    const rootDir = fs.realpathSync(config.slpRootDir);
+    const resolved = fs.realpathSync(path.resolve(rootDir, replay.filePath));
+    if (!resolved.startsWith(rootDir + path.sep)) {
       res.status(403).json({ error: "File path outside allowed directory" });
       return;
     }

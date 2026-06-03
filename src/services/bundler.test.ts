@@ -7,8 +7,6 @@ import { createBundle, cleanupJobTemp } from "./bundler";
 jest.mock("../config", () => ({
   config: {
     jobTempDir: path.join(os.tmpdir(), "lm-test-job-temp-" + process.pid),
-    bundlesDir: path.join(os.tmpdir(), "lm-test-bundles-" + process.pid),
-    bundleMaxAgeHours: 0, // expire immediately for cleanup test
     minFreeDiskMb: 100,
     slpzBinary: "slpz",
     slpzTimeoutMinutes: 30,
@@ -62,7 +60,7 @@ const { config } = require("../config");
 
 afterAll(() => {
   // Clean up test dirs
-  for (const dir of [config.jobTempDir, config.bundlesDir]) {
+  for (const dir of [config.jobTempDir]) {
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true });
     }

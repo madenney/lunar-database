@@ -11,6 +11,8 @@ import { startCompressor, stopCompressor } from "./workers/compressWorker";
 import { startUploader, stopUploader } from "./workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
 import { startHealthMonitor, stopHealthMonitor } from "./services/healthMonitor";
+import { validateClientId } from "./middleware/validateClientId";
+import { preloadBlacklist } from "./services/tokenBlacklist";
 import replayRoutes from "./routes/replays";
 import jobRoutes from "./routes/jobs";
 import statsRoutes from "./routes/stats";
@@ -56,6 +58,7 @@ async function recoverStaleJobs() {
 
 async function main() {
   await connectDb();
+  await preloadBlacklist();
 
   const app = express();
 
@@ -74,13 +77,19 @@ async function main() {
   }));
   app.use(express.json({ limit: "100kb" }));
 
+  // Validate X-Client-Id header format globally (prevents NoSQL injection)
+  app.use(validateClientId);
+
   // Global rate limit: 100 requests per minute per IP
   app.use(createRateLimiter({ windowMs: 60 * 1000, max: 100 }));
 
-  // Strict rate limit on login: 5 attempts per 15 minutes
+  // Rate limit on login: 30 attempts per 15 minutes. This endpoint is hit
+  // server-to-server by the lunar_melee admin proxy (which re-authenticates on
+  // restart/deploy and after token expiry), so 5 was too tight and would lock
+  // out the admin UI; 30 still guards against runaway loops / brute force.
   app.use("/api/admin/login", createRateLimiter({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 30,
     message: { error: "Too many login attempts, please try again later" },
   }));
 
@@ -99,7 +108,8 @@ async function main() {
   app.use("/api/admin", adminRoutes);
 
   // Health check
-  app.get("/health", (_req, res) => res.json({ ok: true }));
+  const healthLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
+  app.get("/health", healthLimiter, (_req, res) => res.json({ ok: true }));
 
   const server = app.listen(config.port, "127.0.0.1", () => {
     console.log(`Server listening on 127.0.0.1:${config.port}`);

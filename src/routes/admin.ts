@@ -17,9 +17,23 @@ import { DownloadEvent } from "../models/DownloadEvent";
 import { blacklistToken } from "../services/tokenBlacklist";
 import { cleanupExpiredJobs } from "../services/storageCleanup";
 import { deleteFromStorage } from "../services/storage";
+import { pinBundle, unpinBundle, PinError } from "../services/pinBundle";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
 import { parseFilter } from "./jobs";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
+import { createRateLimiter } from "../utils/rateLimiter";
+
+const adminMutationLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many admin operations, please try again later" },
+});
+
+const analyticsLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: "Too many analytics requests, please try again later" },
+});
 
 // Pre-computed dummy hash for timing-safe login comparison
 const DUMMY_HASH = bcrypt.hashSync("dummy-timing-safe-value", 12);
@@ -43,19 +57,22 @@ router.post("/login", async (req: Request, res: Response) => {
     if (!admin) {
       // Run bcrypt.compare against dummy hash so response time is constant
       await bcrypt.compare(password, DUMMY_HASH);
+      console.warn(`[AUTH] Failed login — unknown user "${username}" from ${req.ip}`);
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
     if (!(await admin.comparePassword(password))) {
+      console.warn(`[AUTH] Failed login — bad password for "${username}" from ${req.ip}`);
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
+    console.log(`[AUTH] Successful login for "${username}" from ${req.ip}`);
 
     const jti = crypto.randomUUID();
     const token = jwt.sign(
       { adminId: admin._id.toString(), username: admin.username, jti },
       config.jwtSecret,
-      { expiresIn: config.jwtExpiresIn as any }
+      { expiresIn: config.jwtExpiresIn, algorithm: "HS256" }
     );
 
     res.json({ token, username: admin.username });
@@ -67,11 +84,10 @@ router.post("/login", async (req: Request, res: Response) => {
 // All routes below require admin auth
 router.use(requireAdmin);
 
-// Audit logging for admin mutations
+// Audit logging for all admin operations
 router.use((req: Request, _res: Response, next) => {
-  if (req.method !== "GET") {
-    console.log(`[ADMIN] ${req.admin?.username} ${req.method} ${req.path}`);
-  }
+  const level = req.method === "GET" ? "debug" : "log";
+  console[level](`[ADMIN] ${req.admin?.username} ${req.method} ${req.path}`);
   next();
 });
 
@@ -80,9 +96,7 @@ router.post("/logout", async (req: Request, res: Response) => {
   try {
     const payload = req.admin!;
     if (payload.jti) {
-      // Decode to get expiry so the blacklist entry auto-cleans
-      const decoded = jwt.decode(req.headers.authorization!.slice(7)) as jwt.JwtPayload;
-      const expiresAt = decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const expiresAt = payload.exp ? new Date(payload.exp * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000);
       await blacklistToken(payload.jti, expiresAt);
     }
     res.json({ message: "Logged out" });
@@ -244,8 +258,10 @@ router.get("/jobs", async (req: Request, res: Response) => {
       if (Object.keys(query.createdAt).length === 0) delete query.createdAt;
     }
 
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
     const sort: Record<string, 1 | -1> = query.status === "pending"
@@ -267,7 +283,7 @@ router.get("/jobs", async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/jobs/queue — view current queue
-router.get("/jobs/queue", async (_req: Request, res: Response) => {
+router.get("/jobs/queue", analyticsLimiter, async (_req: Request, res: Response) => {
   try {
     const [activeJob, queue] = await Promise.all([
       Job.findOne({ status: { $in: ["processing", "compressing", "uploading"] } }).lean(),
@@ -281,7 +297,7 @@ router.get("/jobs/queue", async (_req: Request, res: Response) => {
 });
 
 // PUT /api/admin/jobs/reorder — bulk reorder pending jobs
-router.put("/jobs/reorder", async (req: Request, res: Response) => {
+router.put("/jobs/reorder", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const { jobIds } = req.body;
     if (!Array.isArray(jobIds) || jobIds.length === 0) {
@@ -335,7 +351,7 @@ router.get("/jobs/:id", async (req: Request, res: Response) => {
 });
 
 // PATCH /api/admin/jobs/:id — edit filter (if pending), change status
-router.patch("/jobs/:id", async (req: Request, res: Response) => {
+router.patch("/jobs/:id", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
@@ -370,6 +386,24 @@ router.patch("/jobs/:id", async (req: Request, res: Response) => {
         res.status(400).json({ error: `Invalid status. Must be one of: ${VALID_JOB_STATUSES.join(", ")}` });
         return;
       }
+      // Only allow specific state transitions to prevent corruption
+      const ADMIN_TRANSITIONS: Record<string, string[]> = {
+        pending: ["cancelled"],
+        processing: ["cancelled", "failed"],
+        compressing: ["cancelled", "failed"],
+        compressed: ["cancelled", "failed"],
+        uploading: ["cancelled", "failed"],
+        completed: [],
+        failed: ["pending"],
+        cancelled: ["pending"],
+      };
+      const allowed = ADMIN_TRANSITIONS[job.status] ?? [];
+      if (!allowed.includes(status)) {
+        res.status(400).json({
+          error: `Cannot transition from '${job.status}' to '${status}'. Allowed: ${allowed.join(", ") || "none"}`,
+        });
+        return;
+      }
       job.status = status;
     }
 
@@ -381,7 +415,7 @@ router.patch("/jobs/:id", async (req: Request, res: Response) => {
 });
 
 // DELETE /api/admin/jobs/:id — cancel + clean up R2 object + temp files
-router.delete("/jobs/:id", async (req: Request, res: Response) => {
+router.delete("/jobs/:id", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
@@ -416,7 +450,7 @@ router.delete("/jobs/:id", async (req: Request, res: Response) => {
 });
 
 // POST /api/admin/jobs/:id/retry — reset failed/cancelled job to pending
-router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
+router.post("/jobs/:id/retry", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
@@ -453,8 +487,36 @@ router.post("/jobs/:id/retry", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/admin/jobs/:id/pin — move bundle to permanent archive/ prefix (exempt from expiry)
+router.post("/jobs/:id/pin", adminMutationLimiter, async (req: Request, res: Response) => {
+  try {
+    const result = await pinBundle(req.params.id as string);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof PinError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/jobs/:id/unpin — return bundle to ephemeral jobs/ prefix (resumes normal expiry)
+router.post("/jobs/:id/unpin", adminMutationLimiter, async (req: Request, res: Response) => {
+  try {
+    const result = await unpinBundle(req.params.id as string);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof PinError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    sendError(res, err);
+  }
+});
+
 // POST /api/admin/storage/cleanup — on-demand expired job cleanup (DB-only, B2 lifecycle handles objects)
-router.post("/storage/cleanup", async (req: Request, res: Response) => {
+router.post("/storage/cleanup", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const rawDays = Number(req.body.maxAgeDays ?? config.storageCleanupAfterDays);
     const maxAgeDays = Number.isFinite(rawDays) && rawDays >= 1 ? Math.floor(rawDays) : config.storageCleanupAfterDays;
@@ -473,7 +535,7 @@ router.post("/storage/cleanup", async (req: Request, res: Response) => {
 });
 
 // POST /api/admin/temp/cleanup — clean orphaned temp files
-router.post("/temp/cleanup", async (req: Request, res: Response) => {
+router.post("/temp/cleanup", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const rawHours = Number(req.body.maxAgeHours ?? 24);
     const maxAgeHours = Number.isFinite(rawHours) && rawHours >= 1 ? rawHours : 24;
@@ -507,23 +569,22 @@ function buildDateFilter(startDate?: string, endDate?: string) {
 }
 
 // GET /api/admin/analytics/overview — high-level stats for a time range
-router.get("/analytics/overview", async (req: Request, res: Response) => {
+router.get("/analytics/overview", analyticsLimiter, async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.query;
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
     const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
 
-    const [searchStats, downloadStats] = await Promise.all([
+    const [searchStats, downloadStats, uniqueSearchClients, uniqueDownloadClients] = await Promise.all([
       SearchEvent.aggregate([
         { $match: dateMatch },
         {
           $group: {
             _id: "$type",
             count: { $sum: 1 },
-            uniqueClients: { $addToSet: "$clientId" },
           },
         },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       DownloadEvent.aggregate([
         { $match: dateMatch },
         {
@@ -532,29 +593,26 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
             count: { $sum: 1 },
             totalBytes: { $sum: "$bundleSize" },
             totalReplays: { $sum: "$replayCount" },
-            uniqueClients: { $addToSet: "$clientId" },
           },
         },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
+      // Separate bounded query for unique client counts
+      SearchEvent.distinct("clientId", { ...dateMatch, clientId: { $ne: null } }).maxTimeMS(30000),
+      DownloadEvent.distinct("clientId", { ...dateMatch, clientId: { $ne: null } }).maxTimeMS(30000),
     ]);
 
     const searches: Record<string, any> = {};
-    const allSearchClients = new Set<string>();
     for (const s of searchStats) {
-      searches[s._id] = { count: s.count, uniqueClients: s.uniqueClients.filter(Boolean).length };
-      for (const c of s.uniqueClients) if (c) allSearchClients.add(c);
+      searches[s._id] = { count: s.count };
     }
 
     const downloads: Record<string, any> = {};
-    const allDownloadClients = new Set<string>();
     for (const d of downloadStats) {
       downloads[d._id] = {
         count: d.count,
         totalBytes: d.totalBytes,
         totalReplays: d.totalReplays,
-        uniqueClients: d.uniqueClients.filter(Boolean).length,
       };
-      for (const c of d.uniqueClients) if (c) allDownloadClients.add(c);
     }
 
     res.json({
@@ -562,8 +620,8 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
       downloads,
       totalSearchEvents: searchStats.reduce((sum, s) => sum + s.count, 0),
       totalDownloadEvents: downloadStats.reduce((sum, d) => sum + d.count, 0),
-      uniqueSearchClients: allSearchClients.size,
-      uniqueDownloadClients: allDownloadClients.size,
+      uniqueSearchClients: uniqueSearchClients.length,
+      uniqueDownloadClients: uniqueDownloadClients.length,
     });
   } catch (err) {
     sendError(res, err);
@@ -571,12 +629,17 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/analytics/activity — daily event counts over time
-router.get("/analytics/activity", async (req: Request, res: Response) => {
+router.get("/analytics/activity", analyticsLimiter, async (req: Request, res: Response) => {
   try {
     const { startDate, endDate, granularity = "day" } = req.query;
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
     const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
 
+    const VALID_GRANULARITIES = ["hour", "day"];
+    if (!VALID_GRANULARITIES.includes(granularity as string)) {
+      res.status(400).json({ error: "Invalid granularity (must be 'hour' or 'day')" });
+      return;
+    }
     const dateFormat = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
 
     const [searchActivity, downloadActivity] = await Promise.all([
@@ -592,7 +655,7 @@ router.get("/analytics/activity", async (req: Request, res: Response) => {
           },
         },
         { $sort: { "_id.date": 1 } },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       DownloadEvent.aggregate([
         { $match: dateMatch },
         {
@@ -606,7 +669,7 @@ router.get("/analytics/activity", async (req: Request, res: Response) => {
           },
         },
         { $sort: { "_id.date": 1 } },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
     ]);
 
     res.json({
@@ -624,7 +687,7 @@ router.get("/analytics/activity", async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/analytics/top-searches — most popular search filters and player queries
-router.get("/analytics/top-searches", async (req: Request, res: Response) => {
+router.get("/analytics/top-searches", analyticsLimiter, async (req: Request, res: Response) => {
   try {
     const { startDate, endDate, limit = "10" } = req.query;
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
@@ -652,7 +715,7 @@ router.get("/analytics/top-searches", async (req: Request, res: Response) => {
         { $group: { _id: "$codes", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: limitNum },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       // Top characters searched
       SearchEvent.aggregate([
         { $match: { ...dateMatch, type: { $in: ["search", "estimate"] } } },
@@ -673,21 +736,21 @@ router.get("/analytics/top-searches", async (req: Request, res: Response) => {
         { $group: { _id: "$chars", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: limitNum },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       // Top stages searched
       SearchEvent.aggregate([
         { $match: { ...dateMatch, type: { $in: ["search", "estimate"] }, "filters.stageId": { $ne: null } } },
         { $group: { _id: "$filters.stageId", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: limitNum },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       // Top player search queries
       SearchEvent.aggregate([
         { $match: { ...dateMatch, type: "player_search", query: { $ne: null } } },
         { $group: { _id: { $toLower: "$query" }, count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: limitNum },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
       // Searches that returned 0 results
       SearchEvent.aggregate([
         { $match: { ...dateMatch, resultCount: 0 } },
@@ -697,7 +760,7 @@ router.get("/analytics/top-searches", async (req: Request, res: Response) => {
             count: { $sum: 1 },
           },
         },
-      ]),
+      ]).option({ maxTimeMS: 30000 }),
     ]);
 
     res.json({
@@ -713,7 +776,7 @@ router.get("/analytics/top-searches", async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/analytics/searches — paginated search event log
-router.get("/analytics/searches", async (req: Request, res: Response) => {
+router.get("/analytics/searches", analyticsLimiter, async (req: Request, res: Response) => {
   try {
     const { type, clientId, startDate, endDate, page = "1", limit = "50" } = req.query;
     const query: Record<string, any> = {};
@@ -723,8 +786,10 @@ router.get("/analytics/searches", async (req: Request, res: Response) => {
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
     if (dateFilter) query.createdAt = dateFilter;
 
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
     const [events, total] = await Promise.all([
@@ -742,7 +807,7 @@ router.get("/analytics/searches", async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/analytics/downloads — paginated download event log
-router.get("/analytics/downloads", async (req: Request, res: Response) => {
+router.get("/analytics/downloads", analyticsLimiter, async (req: Request, res: Response) => {
   try {
     const { type, clientId, startDate, endDate, page = "1", limit = "50" } = req.query;
     const query: Record<string, any> = {};
@@ -752,8 +817,10 @@ router.get("/analytics/downloads", async (req: Request, res: Response) => {
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
     if (dateFilter) query.createdAt = dateFilter;
 
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
     const [events, total] = await Promise.all([

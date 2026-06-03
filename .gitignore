@@ -5,3 +5,5 @@ data/
 *.tgz
 *.pem
 credentials.json
+crawl.log
+.claude/

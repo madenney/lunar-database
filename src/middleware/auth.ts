@@ -7,6 +7,7 @@ export interface AdminPayload {
   adminId: string;
   username: string;
   jti?: string;
+  exp?: number;
 }
 
 declare global {
@@ -26,7 +27,7 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 
   const token = header.slice(7);
   try {
-    const payload = jwt.verify(token, config.jwtSecret) as AdminPayload;
+    const payload = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] }) as AdminPayload;
 
     // Check if this token has been revoked (logout)
     if (payload.jti && await isTokenBlacklisted(payload.jti)) {

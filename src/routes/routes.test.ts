@@ -365,9 +365,9 @@ describe("DELETE /api/jobs/:id", () => {
 
 describe("GET /api/jobs/:id", () => {
   it("returns job status with downloadReady flag", async () => {
-    const job = await Job.create({ filter: { p1ConnectCode: "X#1" } });
+    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, createdBy: TEST_CLIENT_ID });
 
-    const { status, body } = await get(`/api/jobs/${job._id}`);
+    const { status, body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(status).toBe(200);
     expect(body.status).toBe("pending");
     expect(body).toHaveProperty("replayCount");
@@ -384,22 +384,23 @@ describe("GET /api/jobs/:id", () => {
       filter: { p1ConnectCode: "X#1" },
       status: "completed",
       r2Key: "jobs/test.zip",
+      createdBy: TEST_CLIENT_ID,
     });
 
-    const { body } = await get(`/api/jobs/${job._id}`);
+    const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.downloadReady).toBe(true);
   });
 
   it("returns queuePosition and ETAs for pending jobs", async () => {
-    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedProcessingTime: 60 });
-    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedProcessingTime: 30 });
+    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID });
+    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID });
 
     // job1 is first (created earlier), job2 is second
-    const { body: body1 } = await get(`/api/jobs/${job1._id}`);
+    const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body1.queuePosition).toBe(1);
     expect(body1.estimatedWaitSec).toBe(0); // nothing ahead
 
-    const { body: body2 } = await get(`/api/jobs/${job2._id}`);
+    const { body: body2 } = await get(`/api/jobs/${job2._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body2.queuePosition).toBe(2);
     expect(body2.estimatedWaitSec).toBe(60); // job1 ahead
   });
@@ -410,9 +411,10 @@ describe("GET /api/jobs/:id", () => {
       status: "compressing",
       estimatedProcessingTime: 100,
       progress: { step: "compressing", filesProcessed: 50, filesTotal: 100 },
+      createdBy: TEST_CLIENT_ID,
     });
 
-    const { body } = await get(`/api/jobs/${job._id}`);
+    const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.queuePosition).toBe(0);
     expect(body.estimatedWaitSec).toBe(0);
     expect(body.estimatedProcessingTimeSec).toBe(50); // 50% done, 100 * 0.5
@@ -423,17 +425,18 @@ describe("GET /api/jobs/:id", () => {
       filter: { p1ConnectCode: "X#1" },
       status: "compressed",
       estimatedProcessingTime: 60,
+      createdBy: TEST_CLIENT_ID,
     });
 
-    const { body } = await get(`/api/jobs/${job._id}`);
+    const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.queuePosition).toBe(0);
     expect(body.estimatedWaitSec).toBe(0);
   });
 
   it("returns null queue fields for terminal statuses", async () => {
-    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "completed", r2Key: "jobs/test.zip" });
+    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "completed", r2Key: "jobs/test.zip", createdBy: TEST_CLIENT_ID });
 
-    const { body } = await get(`/api/jobs/${job._id}`);
+    const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.queuePosition).toBeNull();
     expect(body.estimatedWaitSec).toBeNull();
     expect(body.estimatedProcessingTimeSec).toBeNull();
@@ -441,14 +444,14 @@ describe("GET /api/jobs/:id", () => {
 
   it("priority affects queue ordering", async () => {
     // Create job1 first but with higher priority number (lower priority)
-    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, priority: 5, estimatedProcessingTime: 60 });
-    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, priority: 0, estimatedProcessingTime: 30 });
+    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, priority: 5, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID });
+    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, priority: 0, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID });
 
     // job2 has lower priority number = processed first
-    const { body: body2 } = await get(`/api/jobs/${job2._id}`);
+    const { body: body2 } = await get(`/api/jobs/${job2._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body2.queuePosition).toBe(1);
 
-    const { body: body1 } = await get(`/api/jobs/${job1._id}`);
+    const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body1.queuePosition).toBe(2);
     expect(body1.estimatedWaitSec).toBe(30); // job2 is ahead
   });
@@ -465,9 +468,13 @@ describe("GET /api/jobs/:id/download", () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" },
       status: "processing",
+      createdBy: TEST_CLIENT_ID,
     });
 
-    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, { redirect: "manual" });
+    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual",
+      headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
     expect(res.status).toBe(400);
   });
 });
@@ -513,13 +520,16 @@ describe("GET /api/jobs/:id/download — download count", () => {
   it("increments downloadCount on each download", async () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" }, status: "completed",
-      r2Key: "jobs/test.zip", downloadCount: 0,
+      r2Key: "jobs/test.zip", downloadCount: 0, createdBy: TEST_CLIENT_ID,
     });
 
     // The download will fail since R2 is not configured in tests,
     // but the increment happens before the presigned URL generation,
     // so we verify by checking the DB after the attempt
-    await fetch(`${baseUrl}/api/jobs/${job._id}/download`, { redirect: "manual" });
+    await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual",
+      headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
 
     // Poll for the fire-and-forget update to complete (up to 2s)
     let updated;

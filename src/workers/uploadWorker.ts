@@ -4,6 +4,7 @@ import { uploadToStorage, deleteFromStorage } from "../services/storage";
 import { cleanupJobTemp } from "../services/bundler";
 import { isCancelled } from "./utils";
 import { config } from "../config";
+import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
 
 let currentJobId: string | null = null;
 let running = false;
@@ -87,16 +88,18 @@ export async function processNextUpload(): Promise<boolean> {
       `Job ${jobId} uploaded: ${(job.bundleSize! / 1024 / 1024).toFixed(1)}MB to B2`
     );
   } catch (err) {
+    const rawMsg = (err as Error).message;
+    const safeMsg = sanitizeJobErrorMessage(rawMsg);
     try {
       job.status = "failed";
-      job.error = (err as Error).message;
+      job.error = safeMsg;
       job.progress = null;
       await job.save();
     } catch (saveErr) {
       console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message);
       await Job.updateOne(
         { _id: jobId },
-        { status: "failed", error: (err as Error).message, progress: null }
+        { status: "failed", error: safeMsg, progress: null }
       ).catch(() => {});
     }
 

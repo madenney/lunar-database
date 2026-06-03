@@ -26,8 +26,11 @@ export async function queryCountAndSize(
   const hasLimits = maxFiles != null || maxSizeMb != null;
 
   if (hasLimits) {
+    // Cap the query to avoid loading millions of docs into memory.
+    // maxFiles caps the final count; fetch at most that many (or a safe ceiling).
+    const fetchLimit = Math.min(maxFiles ?? 50000, 50000);
     const selectFields = options?.includeDuration ? "fileSize duration" : "fileSize";
-    const docs = await Replay.find(query).select(selectFields).maxTimeMS(15000).lean();
+    const docs = await Replay.find(query).select(selectFields).limit(fetchLimit).maxTimeMS(15000).lean();
     const limited = applyReplayLimits(docs, maxFiles, maxSizeMb);
     return {
       count: limited.length,

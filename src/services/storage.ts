@@ -1,5 +1,6 @@
 import fs from "fs";
-import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { config } from "../config";
 
@@ -54,11 +55,28 @@ export async function uploadToStorage(
   }
 }
 
-export function getPublicDownloadUrl(key: string): string {
-  if (!config.publicDownloadBase) {
-    throw new Error("PUBLIC_DOWNLOAD_BASE not configured");
-  }
-  return `${config.publicDownloadBase}/${key}`;
+/** Generate a presigned download URL (1 hour TTL, max 24 hours). */
+export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+  const MAX_EXPIRY = 24 * 60 * 60; // 24 hours
+  const bounded = Math.min(Math.max(60, expiresInSeconds), MAX_EXPIRY);
+  const command = new GetObjectCommand({
+    Bucket: config.s3BucketName,
+    Key: key,
+  });
+  return getSignedUrl(getClient(), command, { expiresIn: bounded });
+}
+
+/** Server-side copy within the bucket (used to move bundles between the
+ *  ephemeral `jobs/` and permanent `archive/` prefixes when pinning). */
+export async function copyObject(srcKey: string, destKey: string): Promise<void> {
+  await getClient().send(
+    new CopyObjectCommand({
+      Bucket: config.s3BucketName,
+      CopySource: encodeURI(`${config.s3BucketName}/${srcKey}`),
+      Key: destKey,
+      ContentType: "application/x-tar",
+    })
+  );
 }
 
 export async function deleteFromStorage(key: string): Promise<void> {

@@ -7,6 +7,7 @@ import { createBundle, cleanupJobTemp } from "../services/bundler";
 import { applyReplayLimits } from "../utils/applyReplayLimits";
 import { isCancelled } from "./utils";
 import { config } from "../config";
+import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
 
 let currentJobId: string | null = null;
 let running = false;
@@ -46,9 +47,10 @@ export async function processNextCompression(): Promise<boolean> {
       throw new Error(`SLP root directory not found: ${resolvedRoot} — is the drive mounted?`);
     }
 
-    // Build query from filter
+    // Build query from filter (cap fetch to avoid OOM on broad filters)
     const query = buildReplaySearchQuery(job.filter);
-    const allReplays = await Replay.find(query).select("filePath fileSize").lean();
+    const fetchLimit = Math.min(job.filter.maxFiles ?? 50000, 50000);
+    const allReplays = await Replay.find(query).select("filePath fileSize").limit(fetchLimit).lean();
     const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
     const filePaths = replays
       .map((r) => path.join(resolvedRoot, r.filePath))
@@ -112,22 +114,24 @@ export async function processNextCompression(): Promise<boolean> {
       `Job ${jobId} compressed: ${filePaths.length} files, ${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );
   } catch (err) {
+    const rawMsg = (err as Error).message;
+    const safeMsg = sanitizeJobErrorMessage(rawMsg);
     try {
       job.status = "failed";
-      job.error = (err as Error).message;
+      job.error = safeMsg;
       job.progress = null;
       await job.save();
     } catch (saveErr) {
       console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message);
       await Job.updateOne(
         { _id: jobId },
-        { status: "failed", error: (err as Error).message, progress: null }
+        { status: "failed", error: safeMsg, progress: null }
       ).catch(() => {});
     }
 
     cleanupJobTemp(jobId);
 
-    console.error(`Job ${jobId} compression failed:`, (err as Error).message);
+    console.error(`Job ${jobId} compression failed:`, rawMsg);
   } finally {
     currentJobId = null;
   }

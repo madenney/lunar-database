@@ -123,9 +123,6 @@ Returns `{ ok: true }`.
 | `MONGODB_URI` | `mongodb://localhost:27017/lm-database` | MongoDB connection string |
 | `PORT` | `3000` | API server port |
 | `SLP_ROOT_DIR` | `/data/slp` | Root directory of `.slp` files |
-| `BUNDLES_DIR` | `/data/bundles` | Where to write bundle `.zip` files |
-| `BUNDLE_MAX_AGE_HOURS` | `72` | How long to keep bundles before cleanup |
-| `CRAWLER_BATCH_SIZE` | `100` | Number of replays to insert per batch |
 
 ## Project Structure
 

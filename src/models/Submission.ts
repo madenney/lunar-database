@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 import { IReplayPlayer, PlayerSchema } from "./Replay";
 
-export type SubmissionStatus = "pending" | "approved" | "rejected";
+export type SubmissionStatus = "pending" | "approving" | "approved" | "rejected";
 
 export interface ISubmission extends Document {
   uploadId: mongoose.Types.ObjectId | null;
@@ -29,7 +29,7 @@ const SubmissionSchema = new Schema<ISubmission>(
     submittedBy: { type: String, default: null },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
+      enum: ["pending", "approving", "approved", "rejected"],
       default: "pending",
     },
     stageId: { type: Number, default: null },

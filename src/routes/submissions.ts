@@ -14,9 +14,9 @@ import { sendError } from "../utils/sendError";
 const router = Router();
 
 // POST /api/submissions/upload — stream a .slp or .zip file to disk, then process
-router.post("/upload", (req: Request, res: Response, next) => {
+router.post("/upload", requireAdmin, (req: Request, res: Response, next) => {
   res.status(503).json({ error: "Uploads are temporarily disabled" });
-}, requireAdmin, async (req: Request, res: Response) => {
+}, async (req: Request, res: Response) => {
   try {
     const filename = req.headers["x-filename"] as string;
     if (!filename) {
@@ -32,7 +32,10 @@ router.post("/upload", (req: Request, res: Response, next) => {
       return;
     }
 
-    const submittedBy = (req.headers["x-submitted-by"] as string) || null;
+    const rawSubmittedBy = req.headers["x-submitted-by"] as string | undefined;
+    const submittedBy = rawSubmittedBy && typeof rawSubmittedBy === "string"
+      ? rawSubmittedBy.slice(0, 256).replace(/[^\w\-\.@\s]/g, "")
+      : null;
 
     fs.mkdirSync(config.airlockDir, { recursive: true });
     const unique = crypto.randomBytes(8).toString("hex");
@@ -137,8 +140,10 @@ router.get("/", requireAdmin, async (req: Request, res: Response) => {
     if (status !== "all") query.status = String(status);
     if (uploadId) query.uploadId = String(uploadId);
 
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string, 10)));
+    const rawPage = parseInt(page as string, 10);
+    const rawLimit = parseInt(limit as string, 10);
+    const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
     const [submissions, total] = await Promise.all([
@@ -172,13 +177,19 @@ router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
 // POST /api/submissions/:id/approve — move from airlock into the main database
 router.post("/:id/approve", requireAdmin, async (req: Request, res: Response) => {
   try {
-    const submission = await Submission.findById(req.params.id);
+    // Atomically claim this submission to prevent double-approval race
+    const submission = await Submission.findOneAndUpdate(
+      { _id: req.params.id, status: "pending" },
+      { status: "approving" },
+      { new: true },
+    );
     if (!submission) {
-      res.status(404).json({ error: "Submission not found" });
-      return;
-    }
-    if (submission.status !== "pending") {
-      res.status(400).json({ error: `Submission already ${submission.status}` });
+      const existing = await Submission.findById(req.params.id);
+      if (!existing) {
+        res.status(404).json({ error: "Submission not found" });
+      } else {
+        res.status(400).json({ error: `Submission already ${existing.status}` });
+      }
       return;
     }
 
@@ -190,6 +201,9 @@ router.post("/:id/approve", requireAdmin, async (req: Request, res: Response) =>
     try {
       fs.renameSync(submission.airlockPath, destPath);
     } catch (moveErr) {
+      // Revert to pending on failure
+      submission.status = "pending";
+      await submission.save().catch(() => {});
       sendError(res, moveErr);
       return;
     }

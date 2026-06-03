@@ -21,6 +21,7 @@ export async function cleanupExpiredJobs(
   const staleJobs = await Job.find({
     status: "completed",
     r2Key: { $ne: null },
+    pinned: { $ne: true }, // pinned bundles live under archive/ and never expire
     $or: [
       { lastDownloadedAt: { $ne: null, $lt: cutoff } },
       { lastDownloadedAt: null, completedAt: { $lt: cutoff } },

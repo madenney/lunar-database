@@ -77,7 +77,7 @@ export async function createBundle(
       // ENOENT from execFile can mean either the binary or the source file is missing.
       // If the binary isn't found, bail immediately — no point continuing.
       if (code === "ENOENT" && msg.includes("spawn " + config.slpzBinary)) {
-        throw new Error(`slpz binary not found at ${config.slpzBinary} — is it installed?`);
+        throw new Error("Compression tool not available — contact administrator");
       }
       // Source file missing (deleted since query); skip silently
       if (code !== "ENOENT" && !msg.includes("No such file")) {
