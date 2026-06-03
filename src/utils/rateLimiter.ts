@@ -1,9 +1,14 @@
 import { Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 
-/** Extract real client IP — prefer req.ip (trust proxy aware), fall back to CF header */
+/**
+ * Extract the real per-visitor IP. Behind the Cloudflare tunnel, req.ip is always
+ * the tunnel's address (every request looks identical), which would collapse all
+ * users into one shared rate-limit bucket. Cloudflare sets CF-Connecting-IP to the
+ * original visitor IP, so prefer that; fall back to req.ip for direct/local requests.
+ */
 export function cfKeyGenerator(req: Request): string {
-  return req.ip || (req.headers["cf-connecting-ip"] as string) || "unknown";
+  return (req.headers["cf-connecting-ip"] as string) || req.ip || "unknown";
 }
 
 /** Create a rate limiter with CF-aware key generator. No-op in test. */
