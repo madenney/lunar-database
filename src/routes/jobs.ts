@@ -206,7 +206,9 @@ router.get("/", jobListLimiter, async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/jobs/bundles — public catalog of completed bundles
+// GET /api/jobs/bundles — public catalog of pinned (permanent) bundles.
+// Only pinned bundles are listed: unpinned bundles are ephemeral (~3 day expiry)
+// and pinned bundles are the ones any visitor is allowed to download.
 router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
   try {
     const { page = "1", limit = "20" } = req.query;
@@ -216,7 +218,7 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
     const limitNum = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
     const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
-    const query = { status: "completed", r2Key: { $ne: null } };
+    const query = { status: "completed", r2Key: { $ne: null }, pinned: true };
     const [bundles, total] = await Promise.all([
       Job.find(query)
         .sort({ downloadCount: -1, completedAt: -1 })
@@ -348,6 +350,16 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
     }
     // Terminal statuses: all remain null
 
+    // When the bundle will be auto-removed: retention runs from the last
+    // download (or completion if never downloaded). Pinned bundles never expire.
+    let expiresAt: Date | null = null;
+    if (job.status === "completed" && job.r2Key && !job.pinned) {
+      const basis = job.lastDownloadedAt ?? job.completedAt;
+      if (basis) {
+        expiresAt = new Date(basis.getTime() + config.storageCleanupAfterDays * 24 * 60 * 60 * 1000);
+      }
+    }
+
     res.json({
       jobId: job._id,
       status: job.status,
@@ -368,6 +380,7 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
       startedAt: job.startedAt,
       createdAt: job.createdAt,
       completedAt: job.completedAt,
+      expiresAt,
     });
   } catch (err) {
     sendError(res, err);
@@ -383,9 +396,10 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       return;
     }
 
-    // Ownership check — require matching clientId
+    // Ownership check — require matching clientId, EXCEPT for pinned bundles,
+    // which are a public catalog ("Popular Downloads") any visitor may download.
     const clientId = req.headers["x-client-id"] as string | undefined;
-    if (!clientId || job.createdBy !== clientId) {
+    if (!job.pinned && (!clientId || job.createdBy !== clientId)) {
       res.status(403).json({ error: "Not authorized to download this job" });
       return;
     }
