@@ -23,7 +23,7 @@ export const config = {
   jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "50", 10),
 
   // Worker safety limits
-  jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "60", 10),
+  jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "480", 10),
   slpzBinary: process.env.SLPZ_BINARY || "/usr/local/bin/slpz",
   slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
