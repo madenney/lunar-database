@@ -482,12 +482,17 @@ describe("GET /api/jobs/:id/download", () => {
 describe("GET /api/jobs/bundles", () => {
   it("returns completed jobs sorted by downloadCount", async () => {
     await Job.create({
-      filter: { p1ConnectCode: "A#1" }, status: "completed", r2Key: "jobs/a.zip",
-      replayCount: 10, bundleSize: 5000, downloadCount: 5, completedAt: new Date(),
+      filter: { p1ConnectCode: "A#1" }, status: "completed", r2Key: "archive/a.zip",
+      pinned: true, replayCount: 10, bundleSize: 5000, downloadCount: 5, completedAt: new Date(),
     });
     await Job.create({
-      filter: { p1ConnectCode: "B#1" }, status: "completed", r2Key: "jobs/b.zip",
-      replayCount: 20, bundleSize: 10000, downloadCount: 15, completedAt: new Date(),
+      filter: { p1ConnectCode: "B#1" }, status: "completed", r2Key: "archive/b.zip",
+      pinned: true, replayCount: 20, bundleSize: 10000, downloadCount: 15, completedAt: new Date(),
+    });
+    // unpinned completed bundle must NOT appear in the public catalog
+    await Job.create({
+      filter: { p1ConnectCode: "D#1" }, status: "completed", r2Key: "jobs/d.zip",
+      pinned: false, replayCount: 1, bundleSize: 100, downloadCount: 99, completedAt: new Date(),
     });
     await Job.create({
       filter: { p1ConnectCode: "C#1" }, status: "pending",
@@ -505,8 +510,8 @@ describe("GET /api/jobs/bundles", () => {
   it("paginates bundles", async () => {
     for (let i = 0; i < 3; i++) {
       await Job.create({
-        filter: { p1ConnectCode: `P${i}#1` }, status: "completed", r2Key: `jobs/p${i}.zip`,
-        replayCount: 10, bundleSize: 5000, downloadCount: i, completedAt: new Date(),
+        filter: { p1ConnectCode: `P${i}#1` }, status: "completed", r2Key: `archive/p${i}.zip`,
+        pinned: true, replayCount: 10, bundleSize: 5000, downloadCount: i, completedAt: new Date(),
       });
     }
 
