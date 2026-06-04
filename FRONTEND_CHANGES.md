@@ -103,6 +103,64 @@ No existing fields changed shape.
 ---
 ---
 
+# Analytics page — new "Top Clients" endpoint (2026-06-03)
+
+A new admin analytics endpoint surfaces the most active clients (for power-user
+and abuse/scraping detection). Add it to the **admin analytics page** alongside
+the existing overview / activity / top-searches widgets.
+
+> Reminder: every `/api/admin/analytics/*` endpoint is **admin-only** — send the
+> admin JWT (`Authorization: Bearer <token>`). The analytics page must live
+> inside the authenticated admin area or these all return `401`.
+
+## Endpoint
+
+```
+GET /api/admin/analytics/top-clients?startDate=&endDate=&limit=20
+```
+
+| Query param | Type | Default | Notes |
+|---|---|---|---|
+| `startDate` | ISO date | — | optional, events on/after |
+| `endDate` | ISO date | — | optional, events on/before |
+| `limit` | number | `20` | 1–100 |
+
+**Response `200`:**
+
+```json
+{
+  "clients": [
+    { "clientId": "f178efca-…", "searches": 142, "downloads": 3,
+      "totalBytes": 6868114349, "totalReplays": 19751, "totalEvents": 145 },
+    { "clientId": null, "searches": 206, "downloads": 0,
+      "totalBytes": 0, "totalReplays": 0, "totalEvents": 206 }
+  ]
+}
+```
+
+Sorted by `totalEvents` (searches + downloads) descending.
+
+## UI notes
+
+- Render as a table: client, searches, downloads, data downloaded (`totalBytes`,
+  format as MB/GB), replays, total events.
+- **`clientId: null`** means requests sent with **no `X-Client-Id` header** — all
+  collapsed into one row. Label it "Anonymous / no client ID". A large `null`
+  row with many searches and zero downloads is a classic header-less-scraper
+  signal, so it's worth making visually distinct.
+- Consider linking a row to the existing **List Search/Download Events**
+  endpoints filtered by that `clientId` (`?clientId=…`) for drill-down.
+
+```js
+const res = await fetch(`/api/admin/analytics/top-clients?limit=20`, {
+  headers: { Authorization: `Bearer ${adminToken}` },
+});
+const { clients } = await res.json();
+```
+
+---
+---
+
 ## Previous changes (already deployed) — Unified Job Filters (2026-02-25)
 
 > Kept for reference. These were shipped earlier; no action needed unless your

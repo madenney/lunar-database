@@ -862,6 +862,58 @@ Most popular search filters, player queries, and zero-result searches.
 
 ---
 
+### Top Clients
+
+```
+GET /api/admin/analytics/top-clients
+```
+
+Most active clients by combined search + download volume — for spotting power users and abuse (e.g. scraping). Search and download events are rolled up per `clientId` and merged, then sorted by total activity.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `startDate` | string | — | ISO 8601 date. Events on or after. |
+| `endDate` | string | — | ISO 8601 date. Events on or before. |
+| `limit` | number | `20` | Max clients to return (1–100). |
+
+**Response** `200`
+
+```json
+{
+  "clients": [
+    {
+      "clientId": "f178efca-3b54-b37a-358b-f912cff59b32",
+      "searches": 142,
+      "downloads": 3,
+      "totalBytes": 6868114349,
+      "totalReplays": 19751,
+      "totalEvents": 145
+    },
+    {
+      "clientId": null,
+      "searches": 206,
+      "downloads": 0,
+      "totalBytes": 0,
+      "totalReplays": 0,
+      "totalEvents": 206
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `clientId` | string \| null | Anonymous client UUID. **`null` = requests sent with no `X-Client-Id` header**, all collapsed into one bucket — a high `null` count can itself indicate header-less scraping. |
+| `searches` | number | Count of search/estimate/player_search events from this client. |
+| `downloads` | number | Count of bundle + single-replay downloads. |
+| `totalBytes` | number | Bytes downloaded by this client. |
+| `totalReplays` | number | Replays served to this client. |
+| `totalEvents` | number | `searches + downloads` — the sort key (descending). |
+
+---
+
 ### List Search Events
 
 ```

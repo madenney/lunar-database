@@ -775,6 +775,62 @@ router.get("/analytics/top-searches", analyticsLimiter, async (req: Request, res
   }
 });
 
+// GET /api/admin/analytics/top-clients — most active clients (abuse / power-user detection)
+router.get("/analytics/top-clients", analyticsLimiter, async (req: Request, res: Response) => {
+  try {
+    const { startDate, endDate, limit = "20" } = req.query;
+    const dateFilter = buildDateFilter(startDate as string, endDate as string);
+    const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
+    const rawLimit = parseInt(limit as string, 10);
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
+
+    const [searchByClient, downloadByClient] = await Promise.all([
+      SearchEvent.aggregate([
+        { $match: dateMatch },
+        { $group: { _id: "$clientId", searches: { $sum: 1 } } },
+      ]).option({ maxTimeMS: 30000 }),
+      DownloadEvent.aggregate([
+        { $match: dateMatch },
+        {
+          $group: {
+            _id: "$clientId",
+            downloads: { $sum: 1 },
+            totalBytes: { $sum: "$bundleSize" },
+            totalReplays: { $sum: "$replayCount" },
+          },
+        },
+      ]).option({ maxTimeMS: 30000 }),
+    ]);
+
+    // Merge the two per-client rollups. clientId may be null (no X-Client-Id
+    // header sent) — those collapse into a single "anonymous" bucket, which is
+    // itself a useful signal (e.g. header-less scraping).
+    const byClient = new Map<string | null, any>();
+    const slot = (id: string | null) => {
+      if (!byClient.has(id)) {
+        byClient.set(id, { clientId: id, searches: 0, downloads: 0, totalBytes: 0, totalReplays: 0 });
+      }
+      return byClient.get(id);
+    };
+    for (const s of searchByClient) slot(s._id ?? null).searches = s.searches;
+    for (const d of downloadByClient) {
+      const c = slot(d._id ?? null);
+      c.downloads = d.downloads;
+      c.totalBytes = d.totalBytes || 0;
+      c.totalReplays = d.totalReplays || 0;
+    }
+
+    const clients = Array.from(byClient.values())
+      .map((c) => ({ ...c, totalEvents: c.searches + c.downloads }))
+      .sort((a, b) => b.totalEvents - a.totalEvents)
+      .slice(0, limitNum);
+
+    res.json({ clients });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // GET /api/admin/analytics/searches — paginated search event log
 router.get("/analytics/searches", analyticsLimiter, async (req: Request, res: Response) => {
   try {
