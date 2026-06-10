@@ -19,6 +19,7 @@ import { cleanupExpiredJobs } from "../services/storageCleanup";
 import { deleteFromStorage } from "../services/storage";
 import { pinBundle, unpinBundle, PinError } from "../services/pinBundle";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
+import { runHealthChecks } from "../services/healthCheck";
 import { parseFilter } from "./jobs";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { createRateLimiter } from "../utils/rateLimiter";
@@ -153,6 +154,17 @@ router.get("/status", async (_req: Request, res: Response) => {
       dbSizeBytes: dbStats.dataSize,
       uptime: process.uptime(),
     });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/health — active end-to-end health check (DB, replay drive,
+// compressor binary, object storage, disk, temp dir, workers). Unlike /status,
+// this actually exercises each dependency so "healthy" means jobs can run.
+router.get("/health", async (_req: Request, res: Response) => {
+  try {
+    res.json(await runHealthChecks());
   } catch (err) {
     sendError(res, err);
   }

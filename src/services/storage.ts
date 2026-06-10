@@ -1,5 +1,5 @@
 import fs from "fs";
-import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { config } from "../config";
@@ -86,4 +86,16 @@ export async function deleteFromStorage(key: string): Promise<void> {
       Key: key,
     })
   );
+}
+
+/**
+ * Verify the object-storage bucket is reachable with the configured credentials.
+ * Throws if not configured or the bucket can't be reached. Used by the admin
+ * health check to confirm uploads/downloads would actually work.
+ */
+export async function pingStorage(): Promise<void> {
+  if (!config.s3Configured) {
+    throw new Error("S3 credentials not configured");
+  }
+  await getClient().send(new HeadBucketCommand({ Bucket: config.s3BucketName }));
 }
