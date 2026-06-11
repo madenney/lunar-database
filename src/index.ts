@@ -1,5 +1,6 @@
 import fs from "fs";
 import express from "express";
+import mongoose from "mongoose";
 import cors from "cors";
 import helmet from "helmet";
 import { config } from "./config";
@@ -110,6 +111,27 @@ async function main() {
   // Health check
   const healthLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
   app.get("/health", healthLimiter, (_req, res) => res.json({ ok: true }));
+
+  // Liveness endpoint for the Shelf status dashboard (status-check contract,
+  // Mode A — http). Any 2xx = up; the `status`/`detail` JSON drives the
+  // green/amber dot. Deliberately cheap (just a Mongo ping) — Shelf polls every
+  // ~30s, so the heavy 7-point diagnostics stay behind /api/admin/health.
+  app.get("/healthz", healthLimiter, async (_req, res) => {
+    let mongo = "down";
+    try {
+      await Promise.race([
+        mongoose.connection.db!.command({ ping: 1 }),
+        new Promise((_r, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
+      ]);
+      mongo = "up";
+    } catch {
+      // Mongo unreachable — the API process is still up, so report degraded.
+    }
+    res.json({
+      status: mongo === "up" ? "ok" : "degraded",
+      detail: `mongo ${mongo} · uptime ${Math.floor(process.uptime())}s`,
+    });
+  });
 
   const server = app.listen(config.port, "127.0.0.1", () => {
     console.log(`Server listening on 127.0.0.1:${config.port}`);
