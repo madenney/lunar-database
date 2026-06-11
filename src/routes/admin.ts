@@ -252,11 +252,17 @@ router.get("/worker/status", (_req: Request, res: Response) => {
 // GET /api/admin/jobs — list all jobs with optional filters
 router.get("/jobs", async (req: Request, res: Response) => {
   try {
-    const { status, createdBy, startDate, endDate, page = "1", limit = "50" } = req.query;
+    const { status, createdBy, anonymous, startDate, endDate, page = "1", limit = "50" } = req.query;
     const query: Record<string, any> = {};
 
     if (status) query.status = String(status);
-    if (createdBy) query.createdBy = String(createdBy);
+    // `anonymous` matches jobs with no client id (null/missing/empty); otherwise
+    // filter by the given createdBy. (null also matches a missing field in Mongo.)
+    if (anonymous === "1" || anonymous === "true") {
+      query.createdBy = { $in: [null, ""] };
+    } else if (createdBy) {
+      query.createdBy = String(createdBy);
+    }
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) {
@@ -794,7 +800,7 @@ router.get("/analytics/top-clients", analyticsLimiter, async (req: Request, res:
     const dateFilter = buildDateFilter(startDate as string, endDate as string);
     const dateMatch = dateFilter ? { createdAt: dateFilter } : {};
     const rawLimit = parseInt(limit as string, 10);
-    const limitNum = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(1000, Math.max(1, rawLimit)) : 20;
 
     const [searchByClient, downloadByClient] = await Promise.all([
       SearchEvent.aggregate([
