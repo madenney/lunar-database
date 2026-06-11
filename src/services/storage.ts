@@ -2,6 +2,7 @@ import fs from "fs";
 import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { config } from "../config";
 
 let client: S3Client | null = null;
@@ -18,6 +19,14 @@ function getClient(): S3Client {
         accessKeyId: config.s3AccessKeyId,
         secretAccessKey: config.s3SecretAccessKey,
       },
+      // The client is a long-lived singleton, so a keep-alive socket that B2
+      // has silently dropped would otherwise make the next request hang until
+      // the OS TCP timeout (tens of seconds). Bound both phases so a dead
+      // socket aborts quickly and the SDK retries on a fresh connection.
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 3000,
+        requestTimeout: 5000,
+      }),
     });
   }
   return client;
