@@ -2,6 +2,7 @@ import fs from "fs";
 import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
+import { Agent as HttpsAgent } from "https";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { config } from "../config";
 
@@ -19,13 +20,16 @@ function getClient(): S3Client {
         accessKeyId: config.s3AccessKeyId,
         secretAccessKey: config.s3SecretAccessKey,
       },
-      // The client is a long-lived singleton, so a keep-alive socket that B2
-      // has silently dropped would otherwise make the next request hang until
-      // the OS TCP timeout (tens of seconds). Bound both phases so a dead
-      // socket aborts quickly and the SDK retries on a fresh connection.
+      // Force IPv4. B2's DNS returns both A and AAAA records, but this host's
+      // IPv6 route to Backblaze is unreachable. The service runs on Node 18,
+      // which lacks "happy eyeballs" (autoSelectFamily, default only in Node 20+),
+      // so it picks the AAAA address and the connection hangs until timeout.
+      // family:4 pins every connection to IPv4. The timeouts are a backstop so a
+      // dead/stale socket aborts fast and the SDK retries instead of hanging.
       requestHandler: new NodeHttpHandler({
         connectionTimeout: 3000,
         requestTimeout: 5000,
+        httpsAgent: new HttpsAgent({ keepAlive: true, family: 4 }),
       }),
     });
   }
