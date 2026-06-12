@@ -185,3 +185,43 @@ export async function runHealthChecks(): Promise<HealthReport> {
   const healthy = checks.every((c) => c.ok || !c.critical);
   return { healthy, checks, checkedAt: new Date().toISOString() };
 }
+
+// --- Cached, stale-while-revalidate access for frequent pollers ----------------
+//
+// The full report is expensive — a B2 HeadBucket plus several filesystem probes —
+// so a status dashboard polling every ~30s must NOT trigger it on every hit.
+// getCachedHealth() serves the last completed report instantly and, only when it
+// is older than the TTL, kicks off ONE background refresh. Net effect: the deep
+// work runs at most once per TTL, and only while something is actually polling
+// (no work when nobody's watching). This mirrors Spring Actuator's health-cache
+// TTL and the stale-while-revalidate (RFC 5861) caching semantics.
+
+let cachedReport: HealthReport | null = null;
+let cachedAt = 0;
+let refreshing = false;
+
+export interface CachedHealth {
+  /** Most recent completed report, or null if none has finished yet. */
+  report: HealthReport | null;
+  /** Age of `report` in ms (Infinity if there is no report yet). */
+  ageMs: number;
+}
+
+export function getCachedHealth(ttlMs = 120_000): CachedHealth {
+  const ageMs = cachedReport ? Date.now() - cachedAt : Infinity;
+  if (!refreshing && ageMs > ttlMs) {
+    refreshing = true;
+    runHealthChecks()
+      .then((report) => {
+        cachedReport = report;
+        cachedAt = Date.now();
+      })
+      .catch(() => {
+        // Keep serving the stale report on error rather than dropping to null.
+      })
+      .finally(() => {
+        refreshing = false;
+      });
+  }
+  return { report: cachedReport, ageMs };
+}

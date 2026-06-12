@@ -12,6 +12,7 @@ import { startCompressor, stopCompressor } from "./workers/compressWorker";
 import { startUploader, stopUploader } from "./workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
 import { startHealthMonitor, stopHealthMonitor } from "./services/healthMonitor";
+import { getCachedHealth } from "./services/healthCheck";
 import { validateClientId } from "./middleware/validateClientId";
 import { preloadBlacklist } from "./services/tokenBlacklist";
 import replayRoutes from "./routes/replays";
@@ -112,25 +113,52 @@ async function main() {
   const healthLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
   app.get("/health", healthLimiter, (_req, res) => res.json({ ok: true }));
 
-  // Liveness endpoint for the Shelf status dashboard (status-check contract,
-  // Mode A — http). Any 2xx = up; the `status`/`detail` JSON drives the
-  // green/amber dot. Deliberately cheap (just a Mongo ping) — Shelf polls every
-  // ~30s, so the heavy 7-point diagnostics stay behind /api/admin/health.
+  // Liveness + deep health for the Shelf status dashboard (status-check
+  // contract, Mode A — http). Two tiers:
+  //   • cheap, every poll — a live Mongo ping (instant DB-down detection)
+  //   • deep, cached — the full 7-point check (DB, drive, slpz, B2, disk, temp,
+  //     workers) served stale-while-revalidate: recomputed at most once per TTL
+  //     and only while something is polling, so Shelf can poll often without us
+  //     hammering B2 / the filesystem on every hit.
+  // 2xx + status drive the dot: ok → 🟢, degraded (process up but a check is
+  // failing or Mongo is unreachable) → 🟡, no response → 🔴 (Shelf detects that).
+  const HEALTHZ_DEEP_TTL_MS = 120_000;
   app.get("/healthz", healthLimiter, async (_req, res) => {
-    let mongo = "down";
+    // Tier 1 — live liveness/DB ping (cheap, every poll).
+    let mongoUp = false;
     try {
       await Promise.race([
         mongoose.connection.db!.command({ ping: 1 }),
         new Promise((_r, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
       ]);
-      mongo = "up";
+      mongoUp = true;
     } catch {
-      // Mongo unreachable — the API process is still up, so report degraded.
+      // Mongo unreachable.
     }
-    res.json({
-      status: mongo === "up" ? "ok" : "degraded",
-      detail: `mongo ${mongo} · uptime ${Math.floor(process.uptime())}s`,
-    });
+
+    // Tier 2 — deep health from the throttled cache.
+    const { report, ageMs } = getCachedHealth(HEALTHZ_DEEP_TTL_MS);
+    const failing = (report?.checks ?? []).filter((c) => !c.ok);
+
+    let status: "ok" | "degraded";
+    let detail: string;
+    if (!mongoUp) {
+      status = "degraded";
+      detail = "mongo unreachable";
+    } else if (failing.length > 0) {
+      status = "degraded";
+      detail = failing.map((c) => `${c.key}: ${c.detail}`).join("; ");
+    } else if (!report) {
+      status = "ok";
+      detail = "mongo up · deep check warming up";
+    } else {
+      status = "ok";
+      detail = `${report.checks.length} checks ok`;
+    }
+    if (report) detail += ` · deep ${Math.floor(ageMs / 1000)}s ago`;
+    if (detail.length > 180) detail = detail.slice(0, 179) + "…";
+
+    res.json({ status, detail });
   });
 
   const server = app.listen(config.port, "127.0.0.1", () => {
