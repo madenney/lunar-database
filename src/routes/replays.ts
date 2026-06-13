@@ -95,6 +95,15 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       }
     }
 
+    // Sorting by replay date ascending ("oldest"): Mongo orders null/missing
+    // startAt FIRST, flooding the top with undated replays so the toggle looks
+    // broken. Exclude them so "oldest" shows the genuinely oldest dated games.
+    // (Descending already puts nulls last; a date-range filter already implies a
+    // non-null startAt, so only add this when startAt isn't already constrained.)
+    if (sortObj.startAt === 1 && (finalQuery as any).startAt === undefined) {
+      (finalQuery as any).startAt = { $ne: null };
+    }
+
     const rawPage = parseInt(page as string, 10);
     const rawLimit = parseInt(limit as string, 10);
     const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;

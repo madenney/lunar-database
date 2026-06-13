@@ -24,6 +24,8 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
     const query = (q as string)?.trim() || "";
 
+    const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     let results;
     if (query.length === 0) {
       // No query — return top players by game count
@@ -34,14 +36,25 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
         .maxTimeMS(5000)
         .lean();
     } else {
-      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const prefixRegex = new RegExp(`^${escaped}`, "i");
-      results = await Player.find({
-        $or: [
-          { connectCode: prefixRegex },
-          { displayName: prefixRegex },
-        ],
-      })
+      const prefixRegex = new RegExp(`^${escapeRe(query)}`, "i");
+      const or: any[] = [
+        { connectCode: prefixRegex },
+        { displayName: prefixRegex },
+      ];
+
+      // Tag-overshoot: players often type MORE than the stored connect-code tag —
+      // e.g. "mango" when the player is MANG#0 ("mang", 54k games). A plain
+      // "^mango" prefix never matches "MANG#…", so it gets buried under unrelated
+      // "Mango…" display names. Here we also match connect codes whose TAG (the
+      // part before '#') is a *prefix* of the query, then let the gameCount sort
+      // float the real player to the top. Only for queries ≥4 chars, tags ≥3.
+      if (query.length >= 4) {
+        const tagPrefixes: string[] = [];
+        for (let n = 3; n < query.length; n++) tagPrefixes.push(escapeRe(query.slice(0, n)));
+        or.push({ connectCode: new RegExp(`^(${tagPrefixes.join("|")})#`, "i") });
+      }
+
+      results = await Player.find({ $or: or })
         .sort({ gameCount: -1 })
         .limit(limitNum)
         .select("connectCode displayName tag gameCount -_id")
