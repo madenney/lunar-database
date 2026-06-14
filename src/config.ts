@@ -7,6 +7,11 @@ export const config = {
   slpRootDir: process.env.SLP_ROOT_DIR || "/data/slp",
   airlockDir: process.env.AIRLOCK_DIR || "/data/airlock",
 
+  // Persistent cache of pre-compressed .slpz files, mirroring SLP_ROOT_DIR's
+  // directory layout. Bundles reuse these instead of recompressing raw .slp on
+  // every download. Populated lazily by the bundler and in bulk by compressAll.ts.
+  slpzArchiveDir: process.env.SLPZ_ARCHIVE_DIR || "/home/matt/Projects/worker/lunar_db/slpz",
+
   // S3-compatible storage (Backblaze B2)
   s3Endpoint: process.env.S3_ENDPOINT || "",
   s3Region: process.env.S3_REGION || "us-west-004",

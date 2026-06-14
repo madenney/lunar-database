@@ -82,7 +82,7 @@ export async function processNextCompression(): Promise<boolean> {
     job.progress = { step: "compressing", filesProcessed: 0, filesTotal: filePaths.length };
     await job.save();
 
-    const { zipPath, size } = await createBundle(filePaths, jobId, (processed, total) => {
+    const { zipPath, size, cacheHits } = await createBundle(filePaths, jobId, (processed, total) => {
       // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
       Job.updateOne(
         { _id: job._id, status: "compressing" },
@@ -111,7 +111,9 @@ export async function processNextCompression(): Promise<boolean> {
 
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
-      `Job ${jobId} compressed: ${filePaths.length} files, ${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
+      `Job ${jobId} compressed: ${filePaths.length} files ` +
+      `(${cacheHits} from slpz cache, ${filePaths.length - cacheHits} fresh), ` +
+      `${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );
   } catch (err) {
     const rawMsg = (err as Error).message;

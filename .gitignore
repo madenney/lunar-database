@@ -6,4 +6,5 @@ data/
 *.pem
 credentials.json
 crawl.log
+compressAll.log
 .claude/

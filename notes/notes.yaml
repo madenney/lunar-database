@@ -1,0 +1,33 @@
+# Shelf notes — one entry per task/note.
+#   human: short line a person reads (required)
+#   ai:    verbose, self-contained brief for a future bot with no prior context
+#   done:  checkbox state (default false)
+# Standard: shelf/docs/notes-convention.md
+- human: Run the slpz compression backfill on the worker
+  done: false
+  ai: >
+    Backfill the slpz cache (pre-compressed .slp -> .slpz) so bundle downloads
+    reuse cached files instead of recompressing on demand. WHY: it had been
+    running on belphegor reading every .slp over NFS from the worker — ~0.9s
+    network wait vs ~0.02s CPU per file, so it crawled at ~3 files/s with a ~13-day
+    ETA. The fix is to run it ON THE WORKER (192.168.1.132), where the archive is
+    LOCAL disk (~45x faster). The belphegor NFS run has been STOPPED (it only got
+    ~42k of ~3.17M done). CURRENT STATE: a standalone, zero-dependency Node script
+    plus a copy of the slpz binary are already staged on the worker at
+    /home/matt/Projects/worker/shared_folder/_backfill/ (= belphegor NFS path
+    /home/matt/Projects/worker/lunar_db/_backfill/). The script (walkCompress.mjs,
+    also committed in the repo at src/scripts/walkCompress.mjs) walks the local
+    replay tree, compresses each .slp to .slpz mirroring the source layout, skips
+    already-done files (resumable), and uses temp-file + atomic rename (crash-safe).
+    It needs NO database — it enumerates by walking the filesystem. NEXT STEP: SSH
+    to the worker (ssh matt@192.168.1.132), cd to the _backfill dir, run the
+    --dry-run first to confirm counts, then the real run. IMPORTANT: the worker is
+    also running the replay_archiver project recording the hax archive live, so the
+    real run MUST be throttled to not starve it — wrap with nice/ionice and cap
+    --concurrency to a few cores (do NOT let it grab all cores; the script defaults
+    to all-cores). Source root (worker-local): .../shared_folder/lunar_db ; dest:
+    .../shared_folder/slpz ; covers all three categories netplay/ranked_anonymized/
+    tournament. When fully done, the LIVE bundler (SLPZ_ARCHIVE_DIR, same slpz tree)
+    just gets cache hits automatically — no API restart needed. Cleanup after:
+    delete the _backfill/ staging dir. Throttled ETA ~overnight; exact ETA visible
+    from the log's rate= line within a minute of launch.

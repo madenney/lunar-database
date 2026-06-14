@@ -19,7 +19,8 @@ import { config } from "../config";
 
 const execFileAsync = promisify(execFile);
 
-const OUTPUT_DIR = "/home/matt/Projects/worker/hax_archive/slpz";
+// Write to the same cache the live bundler reads (SLPZ_ARCHIVE_DIR).
+const OUTPUT_DIR = config.slpzArchiveDir;
 const PER_FILE_TIMEOUT_MS = 60_000;
 
 function parseArgs() {

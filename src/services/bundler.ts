@@ -13,6 +13,8 @@ const yieldToEventLoop = () => new Promise<void>((r) => setImmediate(r));
 export interface BundleResult {
   zipPath: string;
   size: number;
+  /** How many files were served from the pre-compressed .slpz cache (vs compressed fresh). */
+  cacheHits: number;
 }
 
 export interface BundleProgressCallback {
@@ -53,18 +55,48 @@ export async function createBundle(
   const slpzTimeoutMs = config.slpzTimeoutMinutes * 60 * 1000;
   const perFileTimeoutMs = 60 * 1000; // 1 minute per file
 
+  // Reuse the persistent .slpz cache (mirrors SLP_ROOT_DIR's layout) when present,
+  // so we never recompress a file we've already compressed for an earlier bundle.
+  const slpzRoot = config.slpzArchiveDir;
+  const slpRoot = config.slpRootDir ? path.resolve(config.slpRootDir) : null;
+
   // Compress each .slp directly to temp dir as .slpz
   // Use index prefix to prevent filename collisions (e.g. two different Game_20240101T000000.slp)
   let compressed = 0;
+  let cacheHits = 0;
   for (let i = 0; i < filePaths.length; i++) {
     const fp = filePaths[i];
     const outName = `${i}_${path.basename(fp, ".slp")}.slpz`;
     const outPath = path.join(jobDir, outName);
+
+    // Where this file lives (or would live) in the persistent cache.
+    // null if it'd resolve outside the configured root.
+    const relFromRoot = slpRoot ? path.relative(slpRoot, fp) : null;
+    const cachedSlpz =
+      slpzRoot && relFromRoot && !relFromRoot.startsWith("..")
+        ? path.join(slpzRoot, relFromRoot.replace(/\.slp$/i, ".slpz"))
+        : null;
+
     try {
-      await execFileAsync(config.slpzBinary, ["-x", "-o", outPath, fp], {
-        timeout: perFileTimeoutMs,
-        killSignal: "SIGKILL",
-      });
+      if (cachedSlpz && fs.existsSync(cachedSlpz)) {
+        // Cache hit — copy the pre-compressed file, skip slpz entirely.
+        await fsp.copyFile(cachedSlpz, outPath);
+        cacheHits++;
+      } else {
+        // Cache miss — compress now, then populate the cache for next time.
+        await execFileAsync(config.slpzBinary, ["-x", "-o", outPath, fp], {
+          timeout: perFileTimeoutMs,
+          killSignal: "SIGKILL",
+        });
+        if (cachedSlpz) {
+          try {
+            await fsp.mkdir(path.dirname(cachedSlpz), { recursive: true });
+            await fsp.copyFile(outPath, cachedSlpz);
+          } catch {
+            // Best-effort: never fail a bundle because the cache couldn't be written.
+          }
+        }
+      }
       compressed++;
       if (onProgress && compressed % 100 === 0) {
         onProgress(compressed, filePaths.length);
@@ -119,7 +151,7 @@ export async function createBundle(
   // Clean up the temp directory (keep the zip)
   await fsp.rm(jobDir, { recursive: true, force: true });
 
-  return { zipPath, size: stat.size };
+  return { zipPath, size: stat.size, cacheHits };
 }
 
 /**
