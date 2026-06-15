@@ -53,6 +53,7 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
     const n = Number(body.maxSizeMb);
     if (Number.isFinite(n) && n > 0) filter.maxSizeMb = Math.min(n, 10000);
   }
+  const srt = safeString(body.sort); if (srt) filter.sort = srt;
   return filter;
 }
 
@@ -105,9 +106,10 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
 
     const filter = parseFilter(req.body);
 
-    const filterKeys = Object.keys(filter).filter((k) => k !== "maxFiles" && k !== "maxSizeMb");
-    if (filterKeys.length === 0) {
-      res.status(400).json({ error: "At least one filter field is required" });
+    const filterKeys = Object.keys(filter).filter((k) => k !== "maxFiles" && k !== "maxSizeMb" && k !== "sort");
+    const hasLimit = filter.maxFiles != null || filter.maxSizeMb != null;
+    if (filterKeys.length === 0 && !hasLimit) {
+      res.status(400).json({ error: "Add at least one filter or a limit" });
       return;
     }
 
@@ -144,9 +146,11 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     const estimates = calculateEstimates(count, rawSize);
 
     // When a file/size cap is set, `count` is already capped. Get the uncapped
-    // total so we can tell the user their bundle was trimmed.
+    // total so we can tell the user their bundle was trimmed — but only when a real
+    // filter narrows it; for a limit-only job the uncapped total is the entire DB,
+    // so skip that (potentially full-collection) count.
     let totalMatched = count;
-    if (filter.maxFiles != null || filter.maxSizeMb != null) {
+    if (hasLimit && filterKeys.length > 0) {
       totalMatched = await Replay.countDocuments(buildReplaySearchQuery(filter)).maxTimeMS(15000);
     }
 

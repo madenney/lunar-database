@@ -30,10 +30,12 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
   try {
     const params: ReplaySearchParams = req.body;
 
-    // Don't count maxFiles/maxSizeMb as filter fields
-    const filterKeys = Object.keys(params).filter((k) => k !== "maxFiles" && k !== "maxSizeMb");
-    if (filterKeys.length === 0) {
-      res.status(400).json({ error: "At least one filter field is required" });
+    // Don't count maxFiles/maxSizeMb/sort as filter fields. A limit on its own is
+    // enough: the query is bounded by it, so it's safe (and useful) to estimate.
+    const filterKeys = Object.keys(params).filter((k) => k !== "maxFiles" && k !== "maxSizeMb" && k !== "sort");
+    const hasLimit = params.maxFiles != null || params.maxSizeMb != null;
+    if (filterKeys.length === 0 && !hasLimit) {
+      res.status(400).json({ error: "Add at least one filter or a limit" });
       return;
     }
 
@@ -107,7 +109,9 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const rawPage = parseInt(page as string, 10);
     const rawLimit = parseInt(limit as string, 10);
     const pageNum = Number.isFinite(rawPage) ? Math.max(1, Math.min(rawPage, 100000)) : 1;
-    const limitNum = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 200;
+    // Cap matches the frontend's largest page-size option (1,000). Anything
+    // above is clamped so a single response can't blow up.
+    const limitNum = Number.isFinite(rawLimit) ? Math.min(1000, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([

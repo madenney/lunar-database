@@ -1,5 +1,5 @@
 import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery, ReplaySearchParams } from "./replaySearchQuery";
+import { buildReplaySearchQuery, buildSortedQuery, ReplaySearchParams } from "./replaySearchQuery";
 import { applyReplayLimits } from "../utils/applyReplayLimits";
 import { config } from "../config";
 
@@ -28,9 +28,11 @@ export async function queryCountAndSize(
   if (hasLimits) {
     // Cap the query to avoid loading millions of docs into memory.
     // maxFiles caps the final count; fetch at most that many (or a safe ceiling).
+    // Sort first so the limited set is the same first-N the UI shows for this sort.
+    const { query: sortedQuery, sortObj } = buildSortedQuery(filter);
     const fetchLimit = Math.min(maxFiles ?? 50000, 50000);
     const selectFields = options?.includeDuration ? "fileSize duration" : "fileSize";
-    const docs = await Replay.find(query).select(selectFields).limit(fetchLimit).maxTimeMS(15000).lean();
+    const docs = await Replay.find(sortedQuery).select(selectFields).sort(sortObj).limit(fetchLimit).maxTimeMS(15000).lean();
     const limited = applyReplayLimits(docs, maxFiles, maxSizeMb);
     return {
       count: limited.length,

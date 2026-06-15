@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery } from "../services/replaySearchQuery";
+import { buildReplaySearchQuery, buildSortedQuery } from "../services/replaySearchQuery";
 import { createBundle, cleanupJobTemp } from "../services/bundler";
 import { applyReplayLimits } from "../utils/applyReplayLimits";
 import { isCancelled } from "./utils";
@@ -47,10 +47,20 @@ export async function processNextCompression(): Promise<boolean> {
       throw new Error(`SLP root directory not found: ${resolvedRoot} — is the drive mounted?`);
     }
 
-    // Build query from filter (cap fetch to avoid OOM on broad filters)
-    const query = buildReplaySearchQuery(job.filter);
+    // Build query from filter (cap fetch to avoid OOM on broad filters).
+    const hasLimits = job.filter.maxFiles != null || job.filter.maxSizeMb != null;
     const fetchLimit = Math.min(job.filter.maxFiles ?? 50000, 50000);
-    const allReplays = await Replay.find(query).select("filePath fileSize").limit(fetchLimit).lean();
+    // When a limit is set, fetch the first-N in the job's sort order so the
+    // downloaded files match the rows the user saw in the UI. Unlimited downloads
+    // grab everything, so order doesn't matter (and we skip the sort cost).
+    let allReplays;
+    if (hasLimits) {
+      const { query, sortObj } = buildSortedQuery(job.filter);
+      allReplays = await Replay.find(query).select("filePath fileSize").sort(sortObj).limit(fetchLimit).lean();
+    } else {
+      const query = buildReplaySearchQuery(job.filter);
+      allReplays = await Replay.find(query).select("filePath fileSize").limit(fetchLimit).lean();
+    }
     const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
     const filePaths = replays
       .map((r) => path.join(resolvedRoot, r.filePath))

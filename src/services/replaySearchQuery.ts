@@ -15,6 +15,39 @@ export interface ReplaySearchParams {
   endDate?: string;
   maxFiles?: number;
   maxSizeMb?: number;
+  /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
+   *  the same first-N rows the UI shows in that sort order. */
+  sort?: string;
+}
+
+const SORT_ALLOWLIST = ["startAt", "indexedAt", "duration"];
+
+/** Parse a "field:dir" sort string into a Mongo sort object (default: newest). */
+export function parseSort(sort?: string): Record<string, 1 | -1> {
+  if (sort) {
+    const [field, dir] = sort.split(":");
+    if (SORT_ALLOWLIST.includes(field) && (dir === "1" || dir === "-1")) {
+      return { [field]: Number(dir) as 1 | -1 };
+    }
+  }
+  return { startAt: -1 };
+}
+
+/**
+ * Build the search query AND its sort object together, for endpoints that need a
+ * limited result set in sort order (estimate + download worker). Mirrors the list
+ * endpoint: when sorting by ascending date, null/undated replays are excluded so
+ * the "oldest N" are genuinely the oldest dated games (Mongo sorts nulls first).
+ */
+export function buildSortedQuery(
+  params: ReplaySearchParams
+): { query: Record<string, any>; sortObj: Record<string, 1 | -1> } {
+  const sortObj = parseSort(params.sort);
+  let query = buildReplaySearchQuery(params);
+  if (sortObj.startAt === 1) {
+    query = { $and: [query, { startAt: { $ne: null } }] };
+  }
+  return { query, sortObj };
 }
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -46,13 +79,19 @@ function prefixMatch(match: Record<string, any>, prefix: string): Record<string,
 }
 
 export function buildReplaySearchQuery(params: ReplaySearchParams): Record<string, any> {
-  // Exclude junk replays: must have a known stage or at least one known character
+  // Exclude junk replays: must have a known stage or at least one known character,
+  // and must not be a zero-length / aborted game. A `duration` (Slippi
+  // metadata.lastFrame) of 0 or less means the game ended at or before the "GO!"
+  // frame — i.e. quit during the countdown, handwarmer, or a truncated file. We
+  // exclude those but KEEP null/missing duration (genuinely unknown length, but
+  // possibly a valid game).
   const notJunk = {
     $or: [
       { stageId: { $ne: null } },
       { "players.characterId": { $ne: null } },
     ],
     "players.0": { $exists: true },
+    duration: { $not: { $lte: 0 } },
   };
 
   const query: any = {};

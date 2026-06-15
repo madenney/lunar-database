@@ -22,6 +22,9 @@ export interface IJobFilter {
   endDate?: string;
   maxFiles?: number;
   maxSizeMb?: number;
+  /** "field:dir" sort, so a maxFiles-limited download picks the same first-N the
+   *  UI shows in that order. */
+  sort?: string;
 }
 
 export interface IJobProgress {
@@ -73,6 +76,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     endDate: { type: String },
     maxFiles: { type: Number },
     maxSizeMb: { type: Number },
+    sort: { type: String },
   },
   { _id: false }
 );
