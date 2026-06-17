@@ -165,8 +165,14 @@ describe("POST /api/replays/estimate", () => {
     expect(body.replayCount).toBe(2);
   });
 
-  it("rejects maxFiles/maxSizeMb alone without a search filter", async () => {
+  it("accepts a limit alone (a maxFiles bound is enough to estimate)", async () => {
     const { status, body } = await post("/api/replays/estimate", { maxFiles: 5 });
+    expect(status).toBe(200);
+    expect(typeof body.replayCount).toBe("number");
+  });
+
+  it("rejects an empty request (no filter and no limit)", async () => {
+    const { status, body } = await post("/api/replays/estimate", {});
     expect(status).toBe(400);
     expect(body.error).toMatch(/filter/i);
   });

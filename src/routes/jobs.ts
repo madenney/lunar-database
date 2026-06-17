@@ -47,7 +47,7 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
   const ed = safeString(body.endDate); if (ed) filter.endDate = ed;
   if (body.maxFiles != null) {
     const n = Number(body.maxFiles);
-    if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.min(Math.floor(n), 50000);
+    if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.floor(n);
   }
   if (body.maxSizeMb != null) {
     const n = Number(body.maxSizeMb);

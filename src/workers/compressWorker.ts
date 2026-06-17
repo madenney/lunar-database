@@ -4,7 +4,6 @@ import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
 import { buildReplaySearchQuery, buildSortedQuery } from "../services/replaySearchQuery";
 import { createBundle, cleanupJobTemp } from "../services/bundler";
-import { applyReplayLimits } from "../utils/applyReplayLimits";
 import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
@@ -47,24 +46,42 @@ export async function processNextCompression(): Promise<boolean> {
       throw new Error(`SLP root directory not found: ${resolvedRoot} — is the drive mounted?`);
     }
 
-    // Build query from filter (cap fetch to avoid OOM on broad filters).
-    const hasLimits = job.filter.maxFiles != null || job.filter.maxSizeMb != null;
-    const fetchLimit = Math.min(job.filter.maxFiles ?? 50000, 50000);
-    // When a limit is set, fetch the first-N in the job's sort order so the
-    // downloaded files match the rows the user saw in the UI. Unlimited downloads
-    // grab everything, so order doesn't matter (and we skip the sort cost).
-    let allReplays;
-    if (hasLimits) {
-      const { query, sortObj } = buildSortedQuery(job.filter);
-      allReplays = await Replay.find(query).select("filePath fileSize").sort(sortObj).limit(fetchLimit).lean();
+    // Stream the matching replays from the filter (downloads are uncapped). A
+    // cursor keeps memory bounded to one doc at a time as we accumulate file paths
+    // up to the job's maxFiles/maxSizeMb limits (if any). When a limit is set we
+    // read in the job's sort order so the bundle is the same first-N the user saw
+    // in the UI; with no limit, order is irrelevant and we skip the sort cost.
+    const maxFiles = job.filter.maxFiles != null && job.filter.maxFiles > 0 ? Number(job.filter.maxFiles) : Infinity;
+    const maxBytes = job.filter.maxSizeMb != null && job.filter.maxSizeMb > 0 ? Number(job.filter.maxSizeMb) * 1024 * 1024 : Infinity;
+    const ordered = maxFiles !== Infinity || maxBytes !== Infinity;
+
+    let cursorQuery: Record<string, any>;
+    let sortObj: Record<string, 1 | -1> | null = null;
+    if (ordered) {
+      const built = buildSortedQuery(job.filter);
+      cursorQuery = built.query;
+      sortObj = built.sortObj;
     } else {
-      const query = buildReplaySearchQuery(job.filter);
-      allReplays = await Replay.find(query).select("filePath fileSize").limit(fetchLimit).lean();
+      cursorQuery = buildReplaySearchQuery(job.filter);
     }
-    const replays = applyReplayLimits(allReplays, job.filter.maxFiles, job.filter.maxSizeMb);
-    const filePaths = replays
-      .map((r) => path.join(resolvedRoot, r.filePath))
-      .filter((fp) => fp.startsWith(resolvedRoot + path.sep));
+
+    let find = Replay.find(cursorQuery).select("filePath fileSize");
+    if (sortObj) find = find.sort(sortObj);
+    const cursor = find.lean().cursor();
+
+    const filePaths: string[] = [];
+    let rawSize = 0;
+    for await (const r of cursor) {
+      if (filePaths.length >= maxFiles) break;
+      const size = (r as any).fileSize ?? 0;
+      // Always include at least one file, then stop before exceeding the budget.
+      if (filePaths.length > 0 && rawSize + size > maxBytes) break;
+      const fp = path.join(resolvedRoot, (r as any).filePath);
+      if (!fp.startsWith(resolvedRoot + path.sep)) continue; // guard path traversal
+      filePaths.push(fp);
+      rawSize += size;
+    }
+    await cursor.close();
 
     if (filePaths.length === 0) {
       job.status = "failed";
@@ -83,9 +100,12 @@ export async function processNextCompression(): Promise<boolean> {
       throw new Error(`Job timed out after ${config.jobTimeoutMinutes} minutes (during query phase)`);
     }
 
-    job.replayIds = replays.map((r) => r._id);
-    job.replayCount = replays.length;
-    job.estimatedSize = replays.reduce((sum, r) => sum + (r.fileSize || 0), 0);
+    // replayIds is no longer materialised — a large job's ID array would exceed
+    // MongoDB's 16MB per-document limit. The bundle is built straight from the
+    // streamed filePaths, so we only record the count + total size.
+    job.replayIds = [];
+    job.replayCount = filePaths.length;
+    job.estimatedSize = rawSize;
 
     // Bundling step (gather cached .slpz, compress any misses)
     job.status = "bundling";

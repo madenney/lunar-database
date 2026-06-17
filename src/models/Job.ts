@@ -104,7 +104,10 @@ const JobSchema = new Schema<IJob>(
     priority: { type: Number, default: 0 },
     replayIds: {
       type: [{ type: Schema.Types.ObjectId, ref: "Replay" }],
-      validate: [(v: any[]) => v.length <= 50000, "replayIds exceeds maximum of 50,000"],
+      // No longer populated (kept for backward-compat). Bundles stream straight
+      // from the job's filter, so we don't materialise a (potentially
+      // multi-million) ID array that would exceed MongoDB's 16MB document limit.
+      default: [],
     },
     replayCount: { type: Number, default: 0 },
     totalMatched: { type: Number, default: null },
