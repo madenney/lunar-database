@@ -67,7 +67,7 @@ async function checkHealth(): Promise<void> {
   try {
     const cutoff = new Date(Date.now() - STUCK_JOB_MINUTES * 60 * 1000);
     const stuckJob = await Job.findOne({
-      status: { $in: ["processing", "compressing", "uploading"] },
+      status: { $in: ["processing", "bundling", "uploading"] },
       startedAt: { $lt: cutoff },
     }).select("_id status startedAt").lean();
 

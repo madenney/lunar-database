@@ -40,7 +40,7 @@ const analyticsLimiter = createRateLimiter({
 const DUMMY_HASH = bcrypt.hashSync("dummy-timing-safe-value", 12);
 
 const VALID_JOB_STATUSES: JobStatus[] = [
-  "pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled",
+  "pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled",
 ];
 
 const router = Router();
@@ -304,7 +304,7 @@ router.get("/jobs", async (req: Request, res: Response) => {
 router.get("/jobs/queue", analyticsLimiter, async (_req: Request, res: Response) => {
   try {
     const [activeJob, queue] = await Promise.all([
-      Job.findOne({ status: { $in: ["processing", "compressing", "uploading"] } }).lean(),
+      Job.findOne({ status: { $in: ["processing", "bundling", "uploading"] } }).lean(),
       Job.find({ status: "pending" }).sort({ priority: 1, createdAt: 1 }).lean(),
     ]);
 
@@ -408,8 +408,8 @@ router.patch("/jobs/:id", adminMutationLimiter, async (req: Request, res: Respon
       const ADMIN_TRANSITIONS: Record<string, string[]> = {
         pending: ["cancelled"],
         processing: ["cancelled", "failed"],
-        compressing: ["cancelled", "failed"],
-        compressed: ["cancelled", "failed"],
+        bundling: ["cancelled", "failed"],
+        bundled: ["cancelled", "failed"],
         uploading: ["cancelled", "failed"],
         completed: [],
         failed: ["pending"],

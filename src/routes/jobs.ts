@@ -124,7 +124,7 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     if (clientId) {
       const activeCount = await Job.countDocuments({
         createdBy: clientId,
-        status: { $in: ["pending", "processing", "compressing", "compressed", "uploading"] },
+        status: { $in: ["pending", "processing", "bundling", "bundled", "uploading"] },
       });
       if (activeCount >= config.jobMaxConcurrentPerClient) {
         res.status(429).json({
@@ -262,7 +262,7 @@ router.delete("/:id", jobDeleteLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    if (job.status !== "pending" && job.status !== "processing" && job.status !== "compressing" && job.status !== "compressed" && job.status !== "uploading") {
+    if (job.status !== "pending" && job.status !== "processing" && job.status !== "bundling" && job.status !== "bundled" && job.status !== "uploading") {
       res.status(400).json({ error: `Cannot cancel a ${job.status} job` });
       return;
     }
@@ -326,7 +326,7 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
 
       // Check for a currently-active job and add its remaining time
       const activeJob = await Job.findOne({
-        status: { $in: ["processing", "compressing", "uploading"] },
+        status: { $in: ["processing", "bundling", "uploading"] },
       }).select("estimatedProcessingTime progress").lean();
 
       if (activeJob) {
@@ -341,7 +341,7 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
 
       estimatedWaitSec = waitSec;
       estimatedProcessingTimeSec = job.estimatedProcessingTime;
-    } else if (["processing", "compressing", "compressed", "uploading"].includes(job.status)) {
+    } else if (["processing", "bundling", "bundled", "uploading"].includes(job.status)) {
       queuePosition = 0;
       estimatedWaitSec = 0;
       const ept = job.estimatedProcessingTime ?? 0;

@@ -408,9 +408,9 @@ describe("GET /api/jobs/:id", () => {
   it("returns queuePosition 0 for active job", async () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" },
-      status: "compressing",
+      status: "bundling",
       estimatedProcessingTime: 100,
-      progress: { step: "compressing", filesProcessed: 50, filesTotal: 100 },
+      progress: { step: "bundling", filesProcessed: 50, filesTotal: 100 },
       createdBy: TEST_CLIENT_ID,
     });
 
@@ -420,10 +420,10 @@ describe("GET /api/jobs/:id", () => {
     expect(body.estimatedProcessingTimeSec).toBe(50); // 50% done, 100 * 0.5
   });
 
-  it("returns queuePosition 0 for compressed job", async () => {
+  it("returns queuePosition 0 for bundled job", async () => {
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" },
-      status: "compressed",
+      status: "bundled",
       estimatedProcessingTime: 60,
       createdBy: TEST_CLIENT_ID,
     });

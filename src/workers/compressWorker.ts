@@ -87,15 +87,15 @@ export async function processNextCompression(): Promise<boolean> {
     job.replayCount = replays.length;
     job.estimatedSize = replays.reduce((sum, r) => sum + (r.fileSize || 0), 0);
 
-    // Compressing step
-    job.status = "compressing";
-    job.progress = { step: "compressing", filesProcessed: 0, filesTotal: filePaths.length };
+    // Bundling step (gather cached .slpz, compress any misses)
+    job.status = "bundling";
+    job.progress = { step: "bundling", filesProcessed: 0, filesTotal: filePaths.length };
     await job.save();
 
     const { zipPath, size, cacheHits } = await createBundle(filePaths, jobId, (processed, total) => {
       // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
       Job.updateOne(
-        { _id: job._id, status: "compressing" },
+        { _id: job._id, status: "bundling" },
         { "progress.filesProcessed": processed, "progress.filesTotal": total }
       ).exec().catch(() => {}); // progress is best-effort
     });
@@ -112,8 +112,8 @@ export async function processNextCompression(): Promise<boolean> {
       return true;
     }
 
-    // Mark as compressed — uploader will pick it up
-    job.status = "compressed";
+    // Mark as bundled — uploader will pick it up
+    job.status = "bundled";
     job.bundlePath = zipPath;
     job.bundleSize = size;
     job.progress = null;
@@ -121,7 +121,7 @@ export async function processNextCompression(): Promise<boolean> {
 
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
-      `Job ${jobId} compressed: ${filePaths.length} files ` +
+      `Job ${jobId} bundled: ${filePaths.length} files ` +
       `(${cacheHits} from slpz cache, ${filePaths.length - cacheHits} fresh), ` +
       `${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );

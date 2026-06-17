@@ -24,8 +24,8 @@ import submissionsRoutes from "./routes/submissions";
 import adminRoutes from "./routes/admin";
 
 async function recoverStaleJobs() {
-  // processing/compressing → pending (start over, temp files are unreliable after crash)
-  const staleCompressing = await Job.find({ status: { $in: ["processing", "compressing"] } });
+  // processing/bundling → pending (start over, temp files are unreliable after crash)
+  const staleCompressing = await Job.find({ status: { $in: ["processing", "bundling"] } });
   for (const job of staleCompressing) {
     const was = job.status;
     cleanupJobTemp(job._id.toString());
@@ -37,14 +37,14 @@ async function recoverStaleJobs() {
     console.log(`Recovered stale job ${job._id} (was ${was}) → pending`);
   }
 
-  // uploading → compressed if tar exists, else pending
+  // uploading → bundled if tar exists, else pending
   const staleUploading = await Job.find({ status: "uploading" });
   for (const job of staleUploading) {
     if (job.bundlePath && fs.existsSync(job.bundlePath)) {
-      job.status = "compressed";
+      job.status = "bundled";
       job.progress = null;
       await job.save();
-      console.log(`Recovered stale job ${job._id} (was uploading) → compressed`);
+      console.log(`Recovered stale job ${job._id} (was uploading) → bundled`);
     } else {
       cleanupJobTemp(job._id.toString());
       job.status = "pending";

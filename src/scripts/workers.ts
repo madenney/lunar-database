@@ -33,7 +33,7 @@ async function main() {
   // Infer worker activity from DB state
   heading("Worker Activity (from DB)");
 
-  const compressingJobs = await Job.find({ status: { $in: ["processing", "compressing"] } })
+  const compressingJobs = await Job.find({ status: { $in: ["processing", "bundling"] } })
     .select("status progress startedAt replayCount")
     .lean();
 
@@ -48,7 +48,7 @@ async function main() {
       row("Compressor", `\x1b[32mWorking\x1b[0m ...${id} ${detail} started ${started}`);
     }
   } else {
-    row("Compressor", "\x1b[90mIdle\x1b[0m (no jobs in processing/compressing)");
+    row("Compressor", "\x1b[90mIdle\x1b[0m (no jobs in processing/bundling)");
   }
 
   const uploadingJobs = await Job.find({ status: "uploading" })
@@ -66,9 +66,9 @@ async function main() {
   }
 
   // Compressed jobs waiting for upload
-  const waitingUpload = await Job.countDocuments({ status: "compressed" });
+  const waitingUpload = await Job.countDocuments({ status: "bundled" });
   if (waitingUpload > 0) {
-    row("Upload queue", `${waitingUpload} compressed job(s) waiting`);
+    row("Upload queue", `${waitingUpload} bundled job(s) waiting`);
   }
 
   // Pending jobs

@@ -66,7 +66,7 @@ async function main() {
     { $group: { _id: "$status", count: { $sum: 1 } } },
     { $sort: { _id: 1 } },
   ]);
-  const statusOrder = ["pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled"];
+  const statusOrder = ["pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled"];
   const statusMap = new Map(jobsByStatus.map((j) => [j._id, j.count]));
   for (const s of statusOrder) {
     const count = statusMap.get(s) || 0;
@@ -80,7 +80,7 @@ async function main() {
   }
 
   // --- Active/In-Progress Jobs ---
-  const activeStatuses = ["processing", "compressing", "compressed", "uploading"];
+  const activeStatuses = ["processing", "bundling", "bundled", "uploading"];
   const activeJobs = await Job.find({ status: { $in: activeStatuses } })
     .select("status progress replayCount bundleSize startedAt createdAt filter")
     .sort({ startedAt: 1 })

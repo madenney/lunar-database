@@ -20,7 +20,7 @@ export function getUploaderJobId(): string | null {
 
 export async function processNextUpload(): Promise<boolean> {
   const job = await Job.findOneAndUpdate(
-    { status: "compressed" },
+    { status: "bundled" },
     { status: "uploading" },
     { sort: { priority: 1, createdAt: 1 }, new: true }
   );

@@ -28,13 +28,13 @@ const fmt = {
 };
 
 const VALID_STATUSES: JobStatus[] = [
-  "pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled",
+  "pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled",
 ];
 
 const USAGE = `Usage: npm run jobs [status] [--limit N]
 
   status:   Filter by job status (${VALID_STATUSES.join(", ")})
-            Use "active" for processing/compressing/compressed/uploading
+            Use "active" for processing/bundling/bundled/uploading
             Use "queue" for pending jobs
             Default: shows all non-terminal jobs
 
@@ -62,7 +62,7 @@ async function main() {
       limit = parseInt(args[i + 1], 10);
       i++;
     } else if (args[i] === "active") {
-      statusFilter = ["processing", "compressing", "compressed", "uploading"];
+      statusFilter = ["processing", "bundling", "bundled", "uploading"];
     } else if (args[i] === "queue") {
       statusFilter = ["pending"];
     } else if (VALID_STATUSES.includes(args[i] as JobStatus)) {
@@ -72,7 +72,7 @@ async function main() {
 
   // Default: non-terminal jobs
   if (!statusFilter) {
-    statusFilter = ["pending", "processing", "compressing", "compressed", "uploading"];
+    statusFilter = ["pending", "processing", "bundling", "bundled", "uploading"];
   }
 
   await connectDb();
@@ -112,8 +112,8 @@ async function main() {
 
     // Status with color
     const statusColors: Record<string, string> = {
-      pending: "\x1b[33m", processing: "\x1b[36m", compressing: "\x1b[36m",
-      compressed: "\x1b[36m", uploading: "\x1b[36m", completed: "\x1b[32m",
+      pending: "\x1b[33m", processing: "\x1b[36m", bundling: "\x1b[36m",
+      bundled: "\x1b[36m", uploading: "\x1b[36m", completed: "\x1b[32m",
       failed: "\x1b[31m", cancelled: "\x1b[90m",
     };
     const color = statusColors[j.status] || "";

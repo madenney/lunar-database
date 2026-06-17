@@ -19,7 +19,7 @@ async function main() {
   const statusMap = new Map(statusCounts.map((s) => [s._id, s.count]));
   const totalJobs = statusCounts.reduce((sum, s) => sum + s.count, 0);
   row("Total jobs created", fmt.num(totalJobs));
-  const statusOrder = ["pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled"];
+  const statusOrder = ["pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled"];
   for (const s of statusOrder) {
     const count = statusMap.get(s) || 0;
     if (count > 0) {

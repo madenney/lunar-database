@@ -3,8 +3,8 @@ import mongoose, { Schema, Document } from "mongoose";
 export type JobStatus =
   | "pending"
   | "processing"
-  | "compressing"
-  | "compressed"
+  | "bundling"
+  | "bundled"
   | "uploading"
   | "completed"
   | "failed"
@@ -96,7 +96,7 @@ const JobSchema = new Schema<IJob>(
   {
     status: {
       type: String,
-      enum: ["pending", "processing", "compressing", "compressed", "uploading", "completed", "failed", "cancelled"],
+      enum: ["pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled"],
       default: "pending",
     },
     filter: { type: JobFilterSchema, default: {} },

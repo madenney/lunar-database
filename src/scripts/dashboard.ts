@@ -43,7 +43,7 @@ function progressBar(current: number, total: number, width = 20): string {
 function statusColor(status: string): string {
   switch (status) {
     case "pending": return YELLOW;
-    case "processing": case "compressing": case "compressed": case "uploading": return CYAN;
+    case "processing": case "bundling": case "bundled": case "uploading": return CYAN;
     case "completed": return GREEN;
     case "failed": return RED;
     case "cancelled": return GRAY;
@@ -65,7 +65,7 @@ async function render() {
   kv("API", apiUp ? `${GREEN}● running${RESET} on port ${config.port}` : `${RED}● down${RESET} (port ${config.port})`);
 
   // --- Infer worker state from job statuses ---
-  const compressorJob = await Job.findOne({ status: { $in: ["processing", "compressing"] } })
+  const compressorJob = await Job.findOne({ status: { $in: ["processing", "bundling"] } })
     .select("_id status").lean();
   const uploaderJob = await Job.findOne({ status: "uploading" })
     .select("_id status").lean();
@@ -88,7 +88,7 @@ async function render() {
   } catch {}
 
   // --- Active Jobs ---
-  const activeStatuses = ["processing", "compressing", "compressed", "uploading"];
+  const activeStatuses = ["processing", "bundling", "bundled", "uploading"];
   const activeJobs = await Job.find({ status: { $in: activeStatuses } })
     .select("status progress replayCount estimatedSize bundleSize startedAt filter")
     .sort({ startedAt: 1 })
