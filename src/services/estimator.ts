@@ -3,8 +3,18 @@ import { buildReplaySearchQuery, buildSortedQuery, ReplaySearchParams } from "./
 import { applyReplayLimits } from "../utils/applyReplayLimits";
 import { config } from "../config";
 
-/** Compression rate used for ETA estimates (files per second). */
-export const COMPRESS_RATE = 120;
+/**
+ * Per-file throughput used for ETA estimates (files per second).
+ *
+ * The slpz cache is now ~fully populated, so bundle building is dominated by
+ * COPYING cached .slpz files from the worker (over NFS) into the job temp dir,
+ * not by fresh compression. Measured serial cache-hit copy rate over the NFS
+ * mount is ~59 files/s (avg .slpz ~359 KB, latency-bound). Rounded down to 50 to
+ * absorb the occasional cache miss (fresh compress of a raw .slp ~1/s) and the
+ * final archive step. (The old value of 120 assumed fresh compression and never
+ * matched the NFS-mounted reality.)
+ */
+export const COMPRESS_RATE = 50;
 
 export interface EstimateResult {
   count: number;

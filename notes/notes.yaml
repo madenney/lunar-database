@@ -4,7 +4,7 @@
 #   done:  checkbox state (default false)
 # Standard: shelf/docs/notes-convention.md
 - human: Run the slpz compression backfill on the worker
-  done: false
+  done: true
   ai: >
     Backfill the slpz cache (pre-compressed .slp -> .slpz) so bundle downloads
     reuse cached files instead of recompressing on demand. WHY: it had been
