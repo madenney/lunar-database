@@ -2,129 +2,36 @@
 #   human: short line a person reads (required)
 #   ai:    verbose, self-contained brief for a future bot with no prior context
 #   done:  checkbox state (default false)
-# Standard: shelf/docs/notes-convention.md
-- human: Run the slpz compression backfill on the worker
-  done: true
-  ai: >
-    Backfill the slpz cache (pre-compressed .slp -> .slpz) so bundle downloads
-    reuse cached files instead of recompressing on demand. WHY: it had been
-    running on belphegor reading every .slp over NFS from the worker — ~0.9s
-    network wait vs ~0.02s CPU per file, so it crawled at ~3 files/s with a ~13-day
-    ETA. The fix is to run it ON THE WORKER (192.168.1.132), where the archive is
-    LOCAL disk (~45x faster). The belphegor NFS run has been STOPPED (it only got
-    ~42k of ~3.17M done). CURRENT STATE: a standalone, zero-dependency Node script
-    plus a copy of the slpz binary are already staged on the worker at
-    /home/matt/Projects/worker/shared_folder/_backfill/ (= belphegor NFS path
-    /home/matt/Projects/worker/lunar_db/_backfill/). The script (walkCompress.mjs,
-    also committed in the repo at src/scripts/walkCompress.mjs) walks the local
-    replay tree, compresses each .slp to .slpz mirroring the source layout, skips
-    already-done files (resumable), and uses temp-file + atomic rename (crash-safe).
-    It needs NO database — it enumerates by walking the filesystem. NEXT STEP: SSH
-    to the worker (ssh matt@192.168.1.132), cd to the _backfill dir, run the
-    --dry-run first to confirm counts, then the real run. IMPORTANT: the worker is
-    also running the replay_archiver project recording the hax archive live, so the
-    real run MUST be throttled to not starve it — wrap with nice/ionice and cap
-    --concurrency to a few cores (do NOT let it grab all cores; the script defaults
-    to all-cores). Source root (worker-local): .../shared_folder/lunar_db ; dest:
-    .../shared_folder/slpz ; covers all three categories netplay/ranked_anonymized/
-    tournament. When fully done, the LIVE bundler (SLPZ_ARCHIVE_DIR, same slpz tree)
-    just gets cache hits automatically — no API restart needed. Cleanup after:
-    delete the _backfill/ staging dir. Throttled ETA ~overnight; exact ETA visible
-    from the log's rate= line within a minute of launch.
-
-- human: "Security hardening pass — sorted into 2 lists (full plan: SECURITY_HARDENING.md)"
+# Standard: <shelf>/docs/notes-convention.md
+- human: 'Security hardening pass — sorted into 2 lists (full plan: SECURITY_HARDENING.md)'
   done: false
-  ai: >
-    Umbrella/context for the security work. TRIGGER for the migration-time list: when we
-    drop the release video AND move the API + MongoDB off belphegor (mixed-use daily-driver)
-    onto the worker / dedicated box. Tasks below are split into two groups by their human:
-    prefix — "MIGRATION #N" = do these as part of standing up the worker (the first three
-    are basically free because they ARE the clean stand-up; the last two reshape because the
-    topology changes). "STANDALONE #N" = host-independent, can be done any time before/after.
-    Verdict (2026-06-19): ACCEPTABLE WITH HARDENING; do all six must-fixes before relying on
-    the data. CAUTION: confirm the worker is infra-only (archiver/NFS/DB), not also a
-    personal-use box, or the move just relocates the mixed-use risk. Full detail + verified
-    state + verification commands + residual risk: repo doc SECURITY_HARDENING.md.
-
-  # ===== LIST A: comes WITH the worker migration =====
-- human: "MIGRATION #1: privilege separation — run API as lm-database, not matt"
+  ai: |
+    Umbrella/context for the security work. TRIGGER for the migration-time list: when we drop the release video AND move the API + MongoDB off belphegor (mixed-use daily-driver) onto the worker / dedicated box. Tasks below are split into two groups by their human: prefix — "MIGRATION #N" = do these as part of standing up the worker (the first three are basically free because they ARE the clean stand-up; the last two reshape because the topology changes). "STANDALONE #N" = host-independent, can be done any time before/after. Verdict (2026-06-19): ACCEPTABLE WITH HARDENING; do all six must-fixes before relying on the data. CAUTION: confirm the worker is infra-only (archiver/NFS/DB), not also a personal-use box, or the move just relocates the mixed-use risk. Full detail + verified state + verification commands + residual risk: repo doc SECURITY_HARDENING.md.
+- human: 'MIGRATION #1: privilege separation — run API as lm-database, not matt'
   done: false
-  ai: >
-    CRITICAL, and basically free during a fresh stand-up (you're writing the systemd unit +
-    service user from scratch anyway). Today the API runs as user `matt` with NO sandbox
-    (setup.sh never ran). So an RCE/poisoned-dep in the public Node API reads
-    ~/.ssh/id_ed25519 (->worker), .env (->B2 keys), and drops the unauthenticated Mongo.
-    Fix during stand-up: `sudo bash deploy/setup.sh` (creates lm-database user), run API as
-    lm-database, deploy hardened unit (NoNewPrivileges, ProtectHome, ProtectSystem=strict,
-    PrivateTmp, ReadWritePaths=temp only), keep SSH key + B2 creds out of that user's reach.
-    Verify `ps -o user= -C node` => lm-database. See SECURITY_HARDENING.md §5.
-
-- human: "MIGRATION #2: enable MongoDB authentication (set at install)"
+  ai: |
+    CRITICAL, and basically free during a fresh stand-up (you're writing the systemd unit + service user from scratch anyway). Today the API runs as user `matt` with NO sandbox (setup.sh never ran). So an RCE/poisoned-dep in the public Node API reads ~/.ssh/id_ed25519 (->worker), .env (->B2 keys), and drops the unauthenticated Mongo. Fix during stand-up: `sudo bash deploy/setup.sh` (creates lm-database user), run API as lm-database, deploy hardened unit (NoNewPrivileges, ProtectHome, ProtectSystem=strict, PrivateTmp, ReadWritePaths=temp only), keep SSH key + B2 creds out of that user's reach. Verify `ps -o user= -C node` => lm-database. See SECURITY_HARDENING.md §5.
+- human: 'MIGRATION #2: enable MongoDB authentication (set at install)'
   done: false
-  ai: >
-    CRITICAL, free at install — flip it before pointing the API at the new DB. Mongo has NO
-    auth today; localhost-bind is the only control (a bind slip = world-open). Set
-    security.authorization: enabled; create admin (root), lm_app (readWrite lm-database-v2
-    only), lm_backup (read), lm_ro (read); app uses lm_app via MONGODB_URI (authSource=admin).
-    Disable server-side JS (security.javascriptEnabled:false). Verify: `mongosh --eval
-    'db.adminCommand({listDatabases:1})'` fails without creds. See SECURITY_HARDENING.md §4.
-
-- human: "MIGRATION #3: automated + immutable + tested backups"
+  ai: |
+    CRITICAL, free at install — flip it before pointing the API at the new DB. Mongo has NO auth today; localhost-bind is the only control (a bind slip = world-open). Set security.authorization: enabled; create admin (root), lm_app (readWrite lm-database-v2 only), lm_backup (read), lm_ro (read); app uses lm_app via MONGODB_URI (authSource=admin). Disable server-side JS (security.javascriptEnabled:false). Verify: `mongosh --eval 'db.adminCommand({listDatabases:1})'` fails without creds. See SECURITY_HARDENING.md §4.
+- human: 'MIGRATION #3: automated + immutable + tested backups'
   done: false
-  ai: >
-    CRITICAL. The migration IS a mongodump -> mongorestore, so you get the backup mechanism
-    (and a proven restore) for free — wire the recurring job right then. Today there are ZERO
-    backups; one ransomware/rm/corruption = permanent total loss of the 3.17M-doc index.
-    Build: nightly `mongodump --gzip --archive` -> encrypt (age/gpg) -> SEPARATE B2 bucket
-    with Object Lock + versioning, via a SEPARATE key the app host doesn't hold. Plus one
-    offline encrypted USB monthly. SHA-256 next to each dump + weekly verify (poisoning).
-    Monthly `mongorestore` into a scratch DB asserting doc counts. See SECURITY_HARDENING.md §8.
-    (Pairs with STANDALONE #1, which scopes the B2 keys/buckets this job needs.)
-
-- human: "MIGRATION #4: host firewall on the worker (default-deny) + close stray services"
+  ai: |
+    CRITICAL. The migration IS a mongodump -> mongorestore, so you get the backup mechanism (and a proven restore) for free — wire the recurring job right then. Today there are ZERO backups; one ransomware/rm/corruption = permanent total loss of the 3.17M-doc index. Build: nightly `mongodump --gzip --archive` -> encrypt (age/gpg) -> SEPARATE B2 bucket with Object Lock + versioning, via a SEPARATE key the app host doesn't hold. Plus one offline encrypted USB monthly. SHA-256 next to each dump + weekly verify (poisoning). Monthly `mongorestore` into a scratch DB asserting doc counts. See SECURITY_HARDENING.md §8. (Pairs with STANDALONE #1, which scopes the B2 keys/buckets this job needs.)
+- human: 'MIGRATION #4: host firewall on the worker (default-deny) + close stray services'
   done: false
-  ai: >
-    HIGH. Do at cutover, as the worker becomes the DB host. Install ufw/nftables default-deny
-    inbound; allow only what the worker legitimately serves (SSH from LAN+Tailscale, the
-    archiver's needs, NFS only to belphegor if still used) + nothing else. CARE: the worker is
-    the NFS server and runs replay_archiver — don't lock those out. Keep 27017/3002 on
-    127.0.0.1. Never port-forward; disable router UPnP. (belphegor's old Samba/firewall mess
-    matters less once the DB leaves it.) See SECURITY_HARDENING.md §6.
-
-- human: "MIGRATION #5: lock down / re-derive worker access (SSH key + NFS)"
+  ai: |
+    HIGH. Do at cutover, as the worker becomes the DB host. Install ufw/nftables default-deny inbound; allow only what the worker legitimately serves (SSH from LAN+Tailscale, the archiver's needs, NFS only to belphegor if still used) + nothing else. CARE: the worker is the NFS server and runs replay_archiver — don't lock those out. Keep 27017/3002 on 127.0.0.1. Never port-forward; disable router UPnP. (belphegor's old Samba/firewall mess matters less once the DB leaves it.) See SECURITY_HARDENING.md §6.
+- human: 'MIGRATION #5: lock down / re-derive worker access (SSH key + NFS)'
   done: false
-  ai: >
-    HIGH, and partly DISSOLVED by the move: once the API runs on the worker it reads .slp
-    files LOCALLY, so the NFS export to belphegor may no longer be needed (drop it, or lock
-    it to belphegor's IP with root_squash + firewall 111/2049 to that IP). The belphegor->
-    worker SSH key (id_ed25519, currently NO passphrase, unrestricted) also changes relevance
-    — re-derive the trust direction for the new topology; if a key is still needed, restrict
-    it (from="<ip>",command="...",no-pty) + passphrase, dedicated low-priv account. Re-derive
-    this as PART of the cutover, don't carry the old exposure over. See SECURITY_HARDENING.md §5.
-
-  # ===== LIST B: can be done OUTSIDE the migration (host-independent / later) =====
-- human: "STANDALONE #1: scope B2 keys + Object-Locked backup bucket"
+  ai: |
+    HIGH, and partly DISSOLVED by the move: once the API runs on the worker it reads .slp files LOCALLY, so the NFS export to belphegor may no longer be needed (drop it, or lock it to belphegor's IP with root_squash + firewall 111/2049 to that IP). The belphegor-> worker SSH key (id_ed25519, currently NO passphrase, unrestricted) also changes relevance — re-derive the trust direction for the new topology; if a key is still needed, restrict it (from="<ip>",command="...",no-pty) + passphrase, dedicated low-priv account. Re-derive this as PART of the cutover, don't carry the old exposure over. See SECURITY_HARDENING.md §5.
+- human: 'STANDALONE #1: scope B2 keys + Object-Locked backup bucket'
   done: false
-  ai: >
-    HIGH, but pure Backblaze-console config — host-independent, do any time (naturally paired
-    with MIGRATION #3's backup setup). Today broad B2 creds sit in .env on BOTH hosts, so a
-    host compromise can delete the 1.3TB full-DB bundle AND any backups (deletable offsite =
-    not a ransomware backup). Fix: app key = single bucket, no delete/key-mgmt. Backups -> a
-    SEPARATE bucket with Object Lock + versioning, written by a SEPARATE key the app host
-    never holds. Enable Object Lock on the full-DB bundle's bucket too. (Daily B2 spend caps
-    already set — see [[project_b2_caps]].)
-
-- human: "STANDALONE #2: recommended hardening pack (after the must-fixes)"
+  ai: |
+    HIGH, but pure Backblaze-console config — host-independent, do any time (naturally paired with MIGRATION #3's backup setup). Today broad B2 creds sit in .env on BOTH hosts, so a host compromise can delete the 1.3TB full-DB bundle AND any backups (deletable offsite = not a ransomware backup). Fix: app key = single bucket, no delete/key-mgmt. Backups -> a SEPARATE bucket with Object Lock + versioning, written by a SEPARATE key the app host never holds. Enable Object Lock on the full-DB bundle's bucket too. (Daily B2 spend caps already set — see [[project_b2_caps]].)
+- human: 'STANDALONE #2: recommended hardening pack (after the must-fixes)'
   done: false
-  ai: >
-    Lower priority, mostly host-independent, do after must-fixes. (a) LUKS full-disk
-    encryption both machines (TPM2+PIN so unattended reboot works) — easier to set up at
-    OS install, so if you reinstall the worker for the migration, do it then. (b) Cloudflare
-    Access or Tailscale-only gate on /api/admin/* (openly reachable via tunnel today;
-    JWT_SECRET is strong so tokens can't be forged, but reset the unknown admin password to
-    30+ chars). (c) Finish email alerts (GMAIL_APP_PASSWORD) + monitoring: mongod auth
-    failures, admin logins, dropDatabase/large deletes, new listening ports, backup-job
-    failure, disk<10%, SMART; ship logs off-box. (d) Patch + verify RAID/SMART on the worker.
-    (e) Verify NoSQL-injection path: cast user filter values to primitives in
-    buildReplaySearchQuery, reject objects where scalars expected (test ?field[$ne]=).
-    See SECURITY_HARDENING.md.
+  ai: |
+    Lower priority, mostly host-independent, do after must-fixes. (a) LUKS full-disk encryption both machines (TPM2+PIN so unattended reboot works) — easier to set up at OS install, so if you reinstall the worker for the migration, do it then. (b) Cloudflare Access or Tailscale-only gate on /api/admin/* (openly reachable via tunnel today; JWT_SECRET is strong so tokens can't be forged, but reset the unknown admin password to 30+ chars). (c) Finish email alerts (GMAIL_APP_PASSWORD) + monitoring: mongod auth failures, admin logins, dropDatabase/large deletes, new listening ports, backup-job failure, disk<10%, SMART; ship logs off-box. (d) Patch + verify RAID/SMART on the worker. (e) Verify NoSQL-injection path: cast user filter values to primitives in buildReplaySearchQuery, reject objects where scalars expected (test ?field[$ne]=). See SECURITY_HARDENING.md.
