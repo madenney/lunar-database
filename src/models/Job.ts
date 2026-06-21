@@ -53,6 +53,9 @@ export interface IJob extends Document {
   /** When true, the bundle lives under the no-expiry `archive/` prefix and is
    *  exempt from storage cleanup. Toggled by the admin pin/unpin actions. */
   pinned: boolean;
+  /** Marks the single pre-built "entire database" bundle. Surfaced as `fullDb`
+   *  in the public bundles list so the frontend can label/route it specially. */
+  isFullDb: boolean;
   downloadCount: number;
   lastDownloadedAt: Date | null;
   progress: IJobProgress | null;
@@ -117,6 +120,7 @@ const JobSchema = new Schema<IJob>(
     bundleSize: { type: Number, default: null },
     r2Key: { type: String, default: null },
     pinned: { type: Boolean, default: false },
+    isFullDb: { type: Boolean, default: false },
     downloadCount: { type: Number, default: 0 },
     lastDownloadedAt: { type: Date, default: null },
     progress: { type: JobProgressSchema, default: null },

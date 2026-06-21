@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IDownloadEvent extends Document {
-  type: "job" | "replay";
+  type: "job" | "replay" | "full_db";
   jobId: mongoose.Types.ObjectId | null;
   replayId: mongoose.Types.ObjectId | null;
   clientId: string | null;
@@ -12,7 +12,7 @@ export interface IDownloadEvent extends Document {
 
 const DownloadEventSchema = new Schema<IDownloadEvent>(
   {
-    type: { type: String, enum: ["job", "replay"], required: true },
+    type: { type: String, enum: ["job", "replay", "full_db"], required: true },
     jobId: { type: Schema.Types.ObjectId, ref: "Job", default: null },
     replayId: { type: Schema.Types.ObjectId, ref: "Replay", default: null },
     clientId: { type: String, default: null },

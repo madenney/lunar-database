@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
 import { DownloadEvent } from "../models/DownloadEvent";
-import { getPresignedDownloadUrl } from "../services/storage";
+import { getPresignedDownloadUrl, headObject, classifyStorageError } from "../services/storage";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { config } from "../config";
@@ -225,16 +225,20 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
     const query = { status: "completed", r2Key: { $ne: null }, pinned: true };
     const [bundles, total] = await Promise.all([
       Job.find(query)
-        .sort({ downloadCount: -1, completedAt: -1 })
+        // Surface the full-DB bundle first regardless of download count, so the
+        // frontend reliably finds it on page 1 (it's also flagged with fullDb).
+        .sort({ isFullDb: -1, downloadCount: -1, completedAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .select("filter replayCount bundleSize downloadCount completedAt lastDownloadedAt")
+        .select("filter replayCount bundleSize downloadCount completedAt lastDownloadedAt isFullDb")
         .lean(),
       Job.countDocuments(query),
     ]);
 
+    const shaped = bundles.map(({ isFullDb, ...b }) => ({ ...b, fullDb: !!isFullDb }));
+
     res.json({
-      bundles,
+      bundles: shaped,
       pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
     });
   } catch (err) {
@@ -413,12 +417,29 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       return;
     }
 
+    // Best-effort cap pre-check: a HEAD lets us surface a B2 daily-cap (503) so the
+    // client shows the cap message instead of a URL that 503s mid-download. This
+    // FAILS OPEN — only a definite cap signal blocks; any other probe error (missing
+    // object, transient B2 blip, no creds in tests) is ignored and we still hand out
+    // the URL, preserving the long-standing "presign regardless" behavior. (B2
+    // enforces the cap on the actual byte transfer, so a full-DB pull counts against
+    // egress like any other download.)
+    try {
+      await headObject(job.r2Key);
+    } catch (probeErr) {
+      if (classifyStorageError(probeErr) === "cap") {
+        res.status(503).json({ code: "download_cap", error: "Daily download limit reached — please try again tomorrow." });
+        return;
+      }
+      // notfound / transient / other → fail open, proceed to presign.
+    }
+
     // Increment download counter and update last download timestamp
     Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec().catch(() => {});
 
-    // Log download event for analytics
+    // Log download event for analytics (full-DB pulls tagged distinctly).
     DownloadEvent.create({
-      type: "job",
+      type: job.isFullDb ? "full_db" : "job",
       jobId: job._id,
       clientId: clientId || null,
       bundleSize: job.bundleSize,

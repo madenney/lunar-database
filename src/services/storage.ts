@@ -1,5 +1,5 @@
 import fs from "fs";
-import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Agent as HttpsAgent } from "https";
@@ -77,6 +77,34 @@ export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 36
     Key: key,
   });
   return getSignedUrl(getClient(), command, { expiresIn: bounded });
+}
+
+/**
+ * HEAD an object: returns its size in bytes. Throws if the object is missing
+ * (NotFound) or the storage backend is erroring (e.g. B2 daily-cap → 503). Used
+ * to confirm an object is downloadable before minting a presigned URL.
+ */
+export async function headObject(key: string): Promise<{ size: number }> {
+  const res = await getClient().send(
+    new HeadObjectCommand({ Bucket: config.s3BucketName, Key: key })
+  );
+  return { size: res.ContentLength ?? 0 };
+}
+
+/**
+ * Classify an S3/B2 error (from a HEAD/GET) for client-facing handling.
+ *   "cap"      = B2 daily download/bandwidth cap exhausted (503) or throttling
+ *   "notfound" = object missing
+ *   "other"    = anything else (treat as a 5xx)
+ */
+export function classifyStorageError(err: unknown): "notfound" | "cap" | "other" {
+  const e = err as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+  const status = e?.$metadata?.httpStatusCode;
+  const name = e?.name ?? "";
+  if (status === 404 || name === "NotFound" || name === "NoSuchKey") return "notfound";
+  if (status === 503 || /SlowDown|ServiceUnavailable|TooManyRequests/i.test(name)) return "cap";
+  if ((status === 403 || status === 429) && /cap|exceeded/i.test(e?.message ?? "")) return "cap";
+  return "other";
 }
 
 /** Server-side copy within the bucket (used to move bundles between the
