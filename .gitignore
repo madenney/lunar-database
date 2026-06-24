@@ -8,3 +8,4 @@ credentials.json
 crawl.log
 compressAll.log
 .claude/
+dev-api.log

@@ -35,3 +35,34 @@
   done: false
   ai: |
     Lower priority, mostly host-independent, do after must-fixes. (a) LUKS full-disk encryption both machines (TPM2+PIN so unattended reboot works) — easier to set up at OS install, so if you reinstall the worker for the migration, do it then. (b) Cloudflare Access or Tailscale-only gate on /api/admin/* (openly reachable via tunnel today; JWT_SECRET is strong so tokens can't be forged, but reset the unknown admin password to 30+ chars). (c) Finish email alerts (GMAIL_APP_PASSWORD) + monitoring: mongod auth failures, admin logins, dropDatabase/large deletes, new listening ports, backup-job failure, disk<10%, SMART; ship logs off-box. (d) Patch + verify RAID/SMART on the worker. (e) Verify NoSQL-injection path: cast user filter values to primitives in buildReplaySearchQuery, reject objects where scalars expected (test ?field[$ne]=). See SECURITY_HARDENING.md.
+- human: 'Total-playtime stat: ship the floor now + backfill duration for exact per-filter totals'
+  done: false
+  ai: |
+    FEATURE: show "total time" for any search/filter on the frontend — e.g.
+    "5,000 hours of Fox gameplay". The backend ALREADY supports this:
+    POST /api/replays/estimate returns totalDurationFrames for the active filter
+    (queryCountAndSize sums Replay.duration via the same aggregation as size).
+    Frontend just renders totalDurationFrames/60 → seconds/hours per filter.
+    SHIP NOW (free): it's a FLOOR — only 72.6% of replays have duration, so
+    per-filter totals undercount by ~27% until the backfill below. Whole-DB floor
+    today: 19.7B frames ≈ 329M sec ≈ ~10.4 years; "10+ hours/years" reads fine as a
+    lower bound. (Frames at 60fps. duration field = slippi metadata.lastFrame.)
+    BACKFILL (makes per-filter totals EXACT, ~14yr whole-DB): fill the 854,716
+    replays with duration:null. They lack metadata.lastFrame, so duration must come
+    from full frame-parse `new SlippiGame(path).getLatestFrame().frame` — CPU-heavy
+    AND slippi-js OOM-crashes on corrupt .slp (garbage frame-count → alloc GBs),
+    which kills a serial run and crash-loops on the poison file. NEEDS crash-
+    resilience: supervisor that checkpoints the in-flight file, catches OOM, marks
+    it NULL, resumes; OR per-batch child-process isolation w/ memory cap. (OOM is
+    load-independent — happens on an idle box too.)
+    RUN ON THE WORKER (local disk; [[project_worker_ssh]]). Staged: slippi-js at
+    worker ~/dur-backfill/ ; parse script ~/dur-backfill/parseDurations.js (serial+
+    nice, needs crash-fix + ideally parallelism); worklist 854,716 paths at share
+    _dur/worklist.tsv ; 2,800 results already at _dur/results.tsv (resumable; format
+    filePath<TAB>frames|NULL). ETA ~1h parallelized on an IDLE worker (16 cores),
+    ~18h serial/nice'd while the worker is busy (it's an actively-used ffmpeg/GUI box
+    — usually pegged) → run during an idle window; the whole ETA is "free cores",
+    not the crash-fix. APPLY STEP (unwritten): on belphegor read results.tsv,
+    bulkWrite duration by filePath where duration:null, skip NULL.
+    SIDE NOTE: worker confirmed to be a busy video-editing workstation, not infra-
+    only — reinforces rethinking the "move DB to worker" migration target.
