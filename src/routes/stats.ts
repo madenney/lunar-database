@@ -26,7 +26,12 @@ router.get("/", async (_req: Request, res: Response) => {
       mongoose.connection.db!.stats(),
       Replay.aggregate([
         { $match: notJunk },
-        { $group: { _id: null, totalSize: { $sum: "$fileSize" }, totalDurationFrames: { $sum: "$duration" } } },
+        { $group: {
+          _id: null,
+          totalSize: { $sum: "$fileSize" },
+          totalDurationFrames: { $sum: "$duration" },
+          replaysWithDuration: { $sum: { $cond: [{ $gt: ["$duration", 0] }, 1, 0] } },
+        } },
       ]),
     ]);
 
@@ -41,6 +46,7 @@ router.get("/", async (_req: Request, res: Response) => {
       dbSizeBytes: dbStats.dataSize,
       totalFileSizeBytes: totalSizeAgg[0]?.totalSize ?? 0,
       totalDurationFrames: totalSizeAgg[0]?.totalDurationFrames ?? 0,
+      replaysWithDuration: totalSizeAgg[0]?.replaysWithDuration ?? 0,
     });
   } catch (err) {
     sendError(res, err);
