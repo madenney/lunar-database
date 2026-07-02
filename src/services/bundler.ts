@@ -137,10 +137,15 @@ export async function createBundle(
     throw new Error("No files were compressed for bundling");
   }
 
-  // Zip the .slpz files (store mode — no compression, slpz is already compressed)
-  const zipPath = path.join(config.jobTempDir, `${jobId}.zip`);
-  const slpzFiles = await fsp.readdir(jobDir);
-  await execFileAsync("zip", ["-0", "-j", zipPath, ...slpzFiles.map((f) => path.join(jobDir, f))], {
+  // Zip the .slpz files (store mode — no compression, slpz is already compressed).
+  // Point zip at the job dir (cwd) with a single "." rather than listing every file
+  // on the command line: an 80k-file bundle builds a multi-MB argv that fails with
+  // E2BIG. All .slpz files sit flat in jobDir, so `zip -r .` from that cwd stores
+  // them by basename — identical output to the old `-j <every file>`. -q suppresses
+  // zip's per-file stdout so 80k "adding:" lines can't overflow the exec buffer.
+  const zipPath = path.resolve(path.join(config.jobTempDir, `${jobId}.zip`));
+  await execFileAsync("zip", ["-0", "-r", "-q", zipPath, "."], {
+    cwd: jobDir,
     maxBuffer: 50 * 1024 * 1024,
     timeout: slpzTimeoutMs,
     killSignal: "SIGKILL",

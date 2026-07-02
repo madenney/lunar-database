@@ -28,7 +28,14 @@ function getClient(): S3Client {
       // dead/stale socket aborts fast and the SDK retries instead of hanging.
       requestHandler: new NodeHttpHandler({
         connectionTimeout: 3000,
-        requestTimeout: 5000,
+        // requestTimeout caps a single HTTP request. Multi-GB bundles upload in
+        // multipart chunks (see uploadToStorage), and a single ~16MB+ part on a
+        // home uplink can take far longer than a few seconds — a low value here
+        // makes every part time out, retry, and stall the whole upload (bytes
+        // frozen). connectionTimeout (3s) still catches the IPv6/dead-connect
+        // hang this handler was added for; 5min is just a backstop so a truly
+        // dead established socket eventually aborts and the SDK retries.
+        requestTimeout: 300000,
         httpsAgent: new HttpsAgent({ keepAlive: true, family: 4 }),
       }),
     });
@@ -45,8 +52,17 @@ export async function uploadToStorage(
   const stat = fs.statSync(filePath);
 
   try {
+    // S3/B2 allow at most 10,000 parts per multipart upload. At the SDK default
+    // 5MB part size that caps a bundle at ~50GB and, worse, makes huge bundles
+    // use tens of thousands of tiny parts. Scale the part size with the file so we
+    // stay well under 10,000 parts (min 16MB) — e.g. a 60GB bundle → ~16MB parts,
+    // ~3,700 parts. queueSize 4 keeps a few parts in flight without flooding the
+    // uplink.
+    const partSize = Math.max(16 * 1024 * 1024, Math.ceil(stat.size / 8000));
     const upload = new Upload({
       client: getClient(),
+      queueSize: 4,
+      partSize,
       params: {
         Bucket: config.s3BucketName,
         Key: key,

@@ -23,6 +23,44 @@ import referenceRoutes from "./routes/reference";
 import submissionsRoutes from "./routes/submissions";
 import adminRoutes from "./routes/admin";
 
+// Outbound socket errors during long multi-GB uploads to Backblaze (a broken
+// pipe / reset connection — routine on a home uplink over hours) surface as
+// unhandled 'error' events on the TLS socket and would otherwise crash the
+// ENTIRE API, killing the public site and discarding upload progress. These are
+// benign to process state, so we log and keep running — the upload's own retry
+// and the job timeout handle recovery. Any OTHER uncaught error is a real bug:
+// log it and exit so systemd restarts cleanly rather than masking it.
+const BENIGN_NET_CODES = new Set([
+  "EPIPE",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPROTO",
+  "ECONNABORTED",
+  "ERR_STREAM_PREMATURE_CLOSE",
+]);
+function isBenignNetworkError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && BENIGN_NET_CODES.has(code);
+}
+process.on("uncaughtException", (err) => {
+  if (isBenignNetworkError(err)) {
+    console.error(`[uncaughtException] ignored benign network error: ${(err as NodeJS.ErrnoException).code} — ${err.message}`);
+    return;
+  }
+  console.error("[uncaughtException] fatal, exiting for clean restart:", err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  if (isBenignNetworkError(err)) {
+    console.error(`[unhandledRejection] ignored benign network error: ${(err as NodeJS.ErrnoException).code} — ${err.message}`);
+    return;
+  }
+  // Job workers wrap their own failures; an unhandled rejection here is logged
+  // but shouldn't take the API down (unlike uncaughtException, state is intact).
+  console.error("[unhandledRejection]:", err);
+});
+
 async function recoverStaleJobs() {
   // processing/bundling → pending (start over, temp files are unreliable after crash)
   const staleCompressing = await Job.find({ status: { $in: ["processing", "bundling"] } });
