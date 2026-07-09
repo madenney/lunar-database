@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { parseSlpFile } from "./slpParser";
-import { sourceFromFolderLabel } from "../models/Replay";
+import { sourceFromFolderLabel, isUsableReplay } from "../models/Replay";
 
 parentPort!.on("message", (msg: { relPaths: string[]; rootDir: string }) => {
   const results: any[] = [];
@@ -19,7 +19,7 @@ parentPort!.on("message", (msg: { relPaths: string[]; rootDir: string }) => {
 
       const dir = path.dirname(relPath);
       const folderLabel = dir && dir !== "." ? dir : null;
-      results.push({
+      const doc: any = {
         filePath: relPath,
         fileHash,
         fileSize: stat.size,
@@ -28,7 +28,10 @@ parentPort!.on("message", (msg: { relPaths: string[]; rootDir: string }) => {
         source: sourceFromFolderLabel(folderLabel),
         ...parsed,
         indexedAt: new Date(),
-      });
+      };
+      // Materialise the not-junk predicate now — searches filter on it via an index.
+      doc.usable = isUsableReplay(doc);
+      results.push(doc);
     } catch (err) {
       // skip failed files
     }

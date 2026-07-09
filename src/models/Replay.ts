@@ -27,6 +27,36 @@ export function sourceFromFolderLabel(folderLabel: string | null | undefined): R
   return null;
 }
 
+/**
+ * The "not junk" predicate — a replay we're willing to search or serve. It must
+ * have a known stage or at least one known character, at least one player, and
+ * must not be a zero-length/aborted game. A `duration` of 0 or less means the game
+ * ended at or before the "GO!" frame (quit during countdown, handwarmer, truncated
+ * file). null/missing duration is KEPT — unknown length, but possibly a valid game.
+ *
+ * None of this is indexable, so evaluating it forces a fetch of every candidate
+ * document. It's materialised onto each doc as `usable` (see isUsableReplay) so
+ * queries can hit an index instead. Keep the two in lockstep.
+ */
+export const NOT_JUNK_QUERY = {
+  $or: [{ stageId: { $ne: null } }, { "players.characterId": { $ne: null } }],
+  "players.0": { $exists: true },
+  duration: { $not: { $lte: 0 } },
+};
+
+/** In-process twin of NOT_JUNK_QUERY, for tagging a replay at insert time. */
+export function isUsableReplay(r: {
+  stageId?: number | null;
+  duration?: number | null;
+  players?: { characterId?: number | null }[] | null;
+}): boolean {
+  const players = r.players ?? [];
+  if (players.length === 0) return false;
+  if (r.stageId == null && !players.some((p) => p.characterId != null)) return false;
+  if (r.duration != null && r.duration <= 0) return false; // null duration is kept
+  return true;
+}
+
 export interface IReplay extends Document {
   filePath: string;
   fileHash: string;
@@ -39,6 +69,7 @@ export interface IReplay extends Document {
   winner: number | null; // playerIndex of winner, null if inconclusive
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
+  usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
   indexedAt: Date;
 }
 
@@ -66,13 +97,42 @@ const ReplaySchema = new Schema<IReplay>({
   winner: { type: Number, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
+  usable: { type: Boolean, default: null },
   indexedAt: { type: Date, default: Date.now },
 });
+
+// `usable` is the indexed form of NOT_JUNK_QUERY, and every search filters on it —
+// so a replay inserted without it is invisible. Derive it automatically on both
+// insert paths (create/save and insertMany) rather than trusting call sites.
+// NOTE: bulkWrite bypasses these hooks. That's fine for the existing backfills
+// (fileSize/startAt don't affect usability), but anything that writes `duration`,
+// `stageId` or `players` must recompute usable — re-running backfillUsable.ts does it.
+ReplaySchema.pre("save", function () {
+  const doc = this as unknown as IReplay;
+  doc.usable = isUsableReplay(doc);
+});
+// (cast: mongoose's pre() overloads don't expose the (next, docs) insertMany shape)
+ReplaySchema.pre("insertMany", (function (
+  next: (err?: Error) => void,
+  docs: IReplay[]
+) {
+  if (Array.isArray(docs)) {
+    for (const doc of docs) doc.usable = isUsableReplay(doc);
+  }
+  next();
+}) as never);
 
 ReplaySchema.index({ "players.connectCode": 1 });
 ReplaySchema.index({ "players.characterId": 1 });
 ReplaySchema.index({ stageId: 1 });
 ReplaySchema.index({ startAt: 1 });
 ReplaySchema.index({ source: 1 });
+// Serves the common estimate/search shape: match on source + usable, then sum
+// fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
+// (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.
+ReplaySchema.index(
+  { source: 1, usable: 1, fileSize: 1, duration: 1 },
+  { name: "source_usable_size_dur" }
+);
 
 export const Replay = mongoose.model<IReplay>("Replay", ReplaySchema);

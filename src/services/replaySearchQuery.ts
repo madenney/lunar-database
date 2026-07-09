@@ -83,20 +83,12 @@ function prefixMatch(match: Record<string, any>, prefix: string): Record<string,
 }
 
 export function buildReplaySearchQuery(params: ReplaySearchParams): Record<string, any> {
-  // Exclude junk replays: must have a known stage or at least one known character,
-  // and must not be a zero-length / aborted game. A `duration` (Slippi
-  // metadata.lastFrame) of 0 or less means the game ended at or before the "GO!"
-  // frame — i.e. quit during the countdown, handwarmer, or a truncated file. We
-  // exclude those but KEEP null/missing duration (genuinely unknown length, but
-  // possibly a valid game).
-  const notJunk = {
-    $or: [
-      { stageId: { $ne: null } },
-      { "players.characterId": { $ne: null } },
-    ],
-    "players.0": { $exists: true },
-    duration: { $not: { $lte: 0 } },
-  };
+  // Exclude junk replays. This used to inline the NOT_JUNK_QUERY predicate, but none
+  // of it is indexable, so Mongo had to fetch every candidate doc just to re-check
+  // it — ~1.6s of a ~2.5s estimate on a 2M-row filter, to drop 0.5% of rows. It's
+  // now materialised on each doc as `usable` (backfillUsable.ts keeps the two in
+  // lockstep; crawlWorker tags new imports), which an index can serve directly.
+  const notJunk = { usable: true };
 
   const query: any = {};
 

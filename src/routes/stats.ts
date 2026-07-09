@@ -9,14 +9,10 @@ const router = Router();
 // GET /api/stats — overview stats
 router.get("/", async (_req: Request, res: Response) => {
   try {
-    // Exclude junk replays: must have a known stage or at least one known character
-    const notJunk = {
-      $or: [
-        { stageId: { $ne: null } },
-        { "players.characterId": { $ne: null } },
-      ],
-      "players.0": { $exists: true },
-    };
+    // Exclude junk replays via the materialised `usable` flag (see Replay.ts /
+    // backfillUsable.ts) — the raw predicate isn't indexable and forces a fetch of
+    // every candidate document.
+    const notJunk = { usable: true };
 
     const [replayCount, jobCounts, dbStats, totalSizeAgg] = await Promise.all([
       Replay.countDocuments(notJunk),
