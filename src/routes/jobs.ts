@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { Job, IJobFilter } from "../models/Job";
+import { REPLAY_SOURCES } from "../models/Replay";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { getPresignedDownloadUrl, headObject, classifyStorageError } from "../services/storage";
 import { sendError } from "../utils/sendError";
@@ -45,6 +46,20 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
   const sid = safeString(body.stageId); if (sid) filter.stageId = sid;
   const sd = safeString(body.startDate); if (sd) filter.startDate = sd;
   const ed = safeString(body.endDate); if (ed) filter.endDate = ed;
+  // Replay source: keep only known values. Selecting every source is the same as
+  // no filter, so drop it — otherwise it would satisfy the "at least one filter"
+  // guard below and let a client queue a whole-database job.
+  const rawSources = safeString(body.source);
+  if (rawSources) {
+    const picked = rawSources
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => (REPLAY_SOURCES as string[]).includes(s));
+    const unique = Array.from(new Set(picked));
+    if (unique.length > 0 && unique.length < REPLAY_SOURCES.length) {
+      filter.source = unique.join(",");
+    }
+  }
   if (body.maxFiles != null) {
     const n = Number(body.maxFiles);
     if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.floor(n);

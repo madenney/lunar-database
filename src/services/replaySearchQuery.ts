@@ -1,7 +1,8 @@
 /**
  * Builds a MongoDB query from replay search parameters.
- * Shared by GET /api/replays and POST /api/replays/estimate.
+ * Shared by GET /api/replays, POST /api/replays/estimate, and the bundle worker.
  */
+import { REPLAY_SOURCES } from "../models/Replay";
 
 export interface ReplaySearchParams {
   p1CharacterId?: string;
@@ -13,6 +14,9 @@ export interface ReplaySearchParams {
   stageId?: string;
   startDate?: string;
   endDate?: string;
+  /** Comma-joined subset of REPLAY_SOURCES, e.g. "tournament,ranked".
+   *  Absent/empty means no filter (all sources). */
+  source?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -124,6 +128,17 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
     query.stageId = Number(stageIds[0]);
   } else if (stageIds.length > 1) {
     query.stageId = { $in: stageIds.map(Number) };
+  }
+
+  // Replay source (netplay / ranked / tournament). Unknown values are dropped so a
+  // bad param can't poison the query; an empty result means "no filter".
+  const sources = splitParam(params.source).filter((s) =>
+    (REPLAY_SOURCES as string[]).includes(s)
+  );
+  if (sources.length === 1) {
+    query.source = sources[0];
+  } else if (sources.length > 1) {
+    query.source = { $in: sources };
   }
 
   if (params.startDate || params.endDate) {

@@ -83,6 +83,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       stageId: req.query.stageId as string | undefined,
       startDate: req.query.startDate as string | undefined,
       endDate: req.query.endDate as string | undefined,
+      source: req.query.source as string | undefined,
     };
 
     const finalQuery = buildReplaySearchQuery(params);

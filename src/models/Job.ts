@@ -20,6 +20,8 @@ export interface IJobFilter {
   stageId?: string;
   startDate?: string;
   endDate?: string;
+  /** Comma-joined replay sources, e.g. "tournament,ranked". Empty = all. */
+  source?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" sort, so a maxFiles-limited download picks the same first-N the
@@ -77,6 +79,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     stageId: { type: String },
     startDate: { type: String },
     endDate: { type: String },
+    source: { type: String },
     maxFiles: { type: Number },
     maxSizeMb: { type: Number },
     sort: { type: String },

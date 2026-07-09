@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { parseSlpFile } from "./slpParser";
+import { sourceFromFolderLabel } from "../models/Replay";
 
 parentPort!.on("message", (msg: { relPaths: string[]; rootDir: string }) => {
   const results: any[] = [];
@@ -17,11 +18,14 @@ parentPort!.on("message", (msg: { relPaths: string[]; rootDir: string }) => {
         .digest("hex");
 
       const dir = path.dirname(relPath);
+      const folderLabel = dir && dir !== "." ? dir : null;
       results.push({
         filePath: relPath,
         fileHash,
         fileSize: stat.size,
-        folderLabel: dir && dir !== "." ? dir : null,
+        folderLabel,
+        // Tag the source from the import folder root so new crawls never need a backfill.
+        source: sourceFromFolderLabel(folderLabel),
         ...parsed,
         indexedAt: new Date(),
       });
