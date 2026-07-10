@@ -101,9 +101,16 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     // Sorting by replay date ascending ("oldest"): Mongo orders null/missing
     // startAt FIRST, flooding the top with undated replays so the toggle looks
     // broken. Exclude them so "oldest" shows the genuinely oldest dated games.
-    // (Descending already puts nulls last; a date-range filter already implies a
-    // non-null startAt, so only add this when startAt isn't already constrained.)
-    if (sortObj.startAt === 1 && (finalQuery as any).startAt === undefined) {
+    // (Descending already puts nulls last.)
+    //
+    // But this is a presentation tweak, not a filter — it must never be the reason
+    // a search returns nothing. The whole `ranked` source is undated (metadata was
+    // stripped by the anonymisation), so applying it there hid all 850k results and
+    // "oldest" looked broken in the opposite direction. If the exclusion empties the
+    // result, we drop it and return the undated replays instead: date order is
+    // meaningless for them anyway, and showing them beats a mystifying zero.
+    const excludeUndated = sortObj.startAt === 1;
+    if (excludeUndated) {
       (finalQuery as any).startAt = { $ne: null };
     }
 
@@ -115,10 +122,19 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const limitNum = Number.isFinite(rawLimit) ? Math.min(1000, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
-    const [replays, total] = await Promise.all([
-      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
-      Replay.countDocuments(finalQuery).maxTimeMS(10000),
-    ]);
+    const runQuery = () =>
+      Promise.all([
+        Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
+        Replay.countDocuments(finalQuery).maxTimeMS(10000),
+      ]);
+
+    let [replays, total] = await runQuery();
+    if (excludeUndated && total === 0) {
+      // Nothing in this selection has a date — the exclusion above is what emptied
+      // it. Retry without. Costs an extra pass only in the case that was broken.
+      delete (finalQuery as any).startAt;
+      [replays, total] = await runQuery();
+    }
 
     const clientId = req.headers["x-client-id"] as string | undefined;
     SearchEvent.create({
