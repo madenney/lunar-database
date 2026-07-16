@@ -9,3 +9,6 @@ crawl.log
 compressAll.log
 .claude/
 dev-api.log
+
+# Local-only: security review (contains live attack surface — never publish)
+FINAL_SECURITY_AND_PRODUCTION_REVIEW.md
