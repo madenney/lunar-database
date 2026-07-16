@@ -185,7 +185,11 @@ async function main() {
       detail = "mongo unreachable";
     } else if (failing.length > 0) {
       status = "degraded";
-      detail = failing.map((c) => `${c.key}: ${c.detail}`).join("; ");
+      // Public endpoint: expose only the failing check KEYS (e.g. "object-storage,
+      // disk-space"), never each check's `detail` — those strings embed internal
+      // filesystem paths and the B2 bucket name. The full detailed breakdown is
+      // available to admins at GET /api/admin/health (behind requireAdmin).
+      detail = `checks failing: ${failing.map((c) => c.key).join(", ")}`;
     } else if (!report) {
       status = "ok";
       detail = "mongo up · deep check warming up";

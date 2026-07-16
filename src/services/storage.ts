@@ -21,11 +21,13 @@ function getClient(): S3Client {
         secretAccessKey: config.s3SecretAccessKey,
       },
       // Force IPv4. B2's DNS returns both A and AAAA records, but this host's
-      // IPv6 route to Backblaze is unreachable. The service runs on Node 18,
-      // which lacks "happy eyeballs" (autoSelectFamily, default only in Node 20+),
-      // so it picks the AAAA address and the connection hangs until timeout.
-      // family:4 pins every connection to IPv4. The timeouts are a backstop so a
-      // dead/stale socket aborts fast and the SDK retries instead of hanging.
+      // IPv6 route to Backblaze is genuinely unreachable. On Node 24 (which HAS
+      // happy-eyeballs) an unpinned connection no longer hangs — it would race and
+      // fall back to IPv4 — but it would still waste a ~250ms IPv6 attempt against
+      // a known-dead route on every new connection, on the critical upload path.
+      // So family:4 is kept deliberately (skip the pointless IPv6 attempt), not as
+      // a Node-18 workaround. The timeouts are a backstop so a dead/stale socket
+      // aborts fast and the SDK retries instead of hanging.
       requestHandler: new NodeHttpHandler({
         connectionTimeout: 3000,
         // requestTimeout caps a single HTTP request. Multi-GB bundles upload in
