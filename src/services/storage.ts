@@ -86,13 +86,51 @@ export async function uploadToStorage(
   }
 }
 
-/** Generate a presigned download URL (1 hour TTL, max 24 hours). */
-export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+/**
+ * Sanitize a caller-supplied download filename into something safe to embed in
+ * a `Content-Disposition` header, and guarantee a `.zip` extension (bundles are
+ * always zips — see bundler.ts). Returns a fallback if nothing usable is left.
+ *
+ * The name is only cosmetic (it's what the browser saves the file as), but it
+ * arrives from an untrusted query param, so strip everything outside a
+ * conservative charset — no quotes, control chars, or path separators that
+ * could break out of the header or the filename.
+ */
+export function sanitizeDownloadFilename(raw: unknown): string {
+  const cleaned =
+    typeof raw === "string"
+      ? raw.trim().slice(0, 200).replace(/[^a-zA-Z0-9._-]/g, "_")
+      : "";
+  const base = cleaned.replace(/\.zip$/i, "") || "lunar-db";
+  return `${base}.zip`;
+}
+
+/**
+ * Generate a presigned download URL (1 hour TTL, max 24 hours).
+ *
+ * When `downloadFilename` is given, the URL carries a `ResponseContentDisposition`
+ * override so the object downloads under that name regardless of its storage key.
+ * Without it the browser names the file after the key's basename — which is how a
+ * legacy `jobs/<id>.tar` object ended up saving as `.tar`.
+ */
+export async function getPresignedDownloadUrl(
+  key: string,
+  expiresInSeconds = 3600,
+  downloadFilename?: string,
+): Promise<string> {
   const MAX_EXPIRY = 24 * 60 * 60; // 24 hours
   const bounded = Math.min(Math.max(60, expiresInSeconds), MAX_EXPIRY);
   const command = new GetObjectCommand({
     Bucket: config.s3BucketName,
     Key: key,
+    ...(downloadFilename
+      ? {
+          ResponseContentDisposition: `attachment; filename="${sanitizeDownloadFilename(
+            downloadFilename,
+          )}"`,
+          ResponseContentType: "application/zip",
+        }
+      : {}),
   });
   return getSignedUrl(getClient(), command, { expiresIn: bounded });
 }

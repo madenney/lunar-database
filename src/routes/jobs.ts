@@ -461,7 +461,16 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       replayCount: job.replayCount,
     }).catch(() => {});
 
-    const url = await getPresignedDownloadUrl(job.r2Key);
+    // `filename` is a cosmetic, caller-supplied name for the saved file; it's
+    // sanitized + forced to `.zip` inside getPresignedDownloadUrl. Passing it
+    // sets Content-Disposition on the presigned URL so the browser doesn't fall
+    // back to naming the file after the storage key (which is how old `.tar`
+    // objects saved as `.tar`). Falls back to the job id when absent.
+    const requestedName =
+      typeof req.query.filename === "string" && req.query.filename.trim()
+        ? req.query.filename
+        : `lunar-db-${String(job._id).slice(-8)}`;
+    const url = await getPresignedDownloadUrl(job.r2Key, 3600, requestedName);
     res.json({ url });
   } catch (err) {
     sendError(res, err);
