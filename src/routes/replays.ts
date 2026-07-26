@@ -180,6 +180,31 @@ router.get("/:id", replayGetLimiter, async (req: Request, res: Response) => {
   }
 });
 
+const viewLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
+// POST /api/replays/:id/view — record one in-browser watch. Denormalized counter;
+// callers dedupe per session, so this is a plain increment. Returns the new count.
+router.post("/:id/view", viewLimiter, async (req: Request, res: Response) => {
+  try {
+    const updated = await Replay.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { viewCount: 1 } },
+      { new: true, projection: { viewCount: 1 } },
+    ).lean();
+    if (!updated) {
+      res.status(404).json({ error: "Replay not found" });
+      return;
+    }
+    res.json({ viewCount: updated.viewCount });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 const downloadLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 10,

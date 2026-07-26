@@ -70,6 +70,7 @@ export interface IReplay extends Document {
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
+  viewCount: number; // times watched in the in-browser viewer (denormalized counter)
   indexedAt: Date;
 }
 
@@ -98,6 +99,10 @@ const ReplaySchema = new Schema<IReplay>({
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
   usable: { type: Boolean, default: null },
+  // Times this replay has been watched in the in-browser viewer. Denormalized so
+  // the count can be shown per replay (and, later, sorted on — that will need an
+  // index; not added yet to avoid a build across the whole collection).
+  viewCount: { type: Number, default: 0 },
   indexedAt: { type: Date, default: Date.now },
 });
 
