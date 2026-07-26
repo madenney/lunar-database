@@ -77,14 +77,15 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       p1CharacterId: req.query.p1CharacterId as string | undefined,
       p1ConnectCode: req.query.p1ConnectCode as string | undefined,
       p1DisplayName: req.query.p1DisplayName as string | undefined,
+      p1Rank: req.query.p1Rank as string | undefined,
       p2CharacterId: req.query.p2CharacterId as string | undefined,
       p2ConnectCode: req.query.p2ConnectCode as string | undefined,
       p2DisplayName: req.query.p2DisplayName as string | undefined,
+      p2Rank: req.query.p2Rank as string | undefined,
       stageId: req.query.stageId as string | undefined,
       startDate: req.query.startDate as string | undefined,
       endDate: req.query.endDate as string | undefined,
       source: req.query.source as string | undefined,
-      rank: req.query.rank as string | undefined,
     };
 
     const finalQuery = buildReplaySearchQuery(params);

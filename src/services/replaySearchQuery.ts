@@ -8,19 +8,22 @@ export interface ReplaySearchParams {
   p1CharacterId?: string;
   p1ConnectCode?: string;
   p1DisplayName?: string;
+  /** Comma-joined rank tiers (see RANK_KEYS) for one side of the matchup, e.g.
+   *  "master,diamond". Ranked dataset only — each player's displayName encodes
+   *  their tier. When both p1Rank and p2Rank are set, they match as an
+   *  order-independent matchup (e.g. Master vs Diamond); one side alone means
+   *  "a game containing a player of that tier". Absent/empty = no rank filter. */
+  p1Rank?: string;
   p2CharacterId?: string;
   p2ConnectCode?: string;
   p2DisplayName?: string;
+  p2Rank?: string;
   stageId?: string;
   startDate?: string;
   endDate?: string;
   /** Comma-joined subset of REPLAY_SOURCES, e.g. "tournament,ranked".
    *  Absent/empty means no filter (all sources). */
   source?: string;
-  /** Comma-joined rank tiers (see RANK_KEYS), e.g. "master,diamond". Only
-   *  meaningful for the anonymized ranked dataset, where each player's
-   *  displayName encodes their tier. Absent/empty means no rank filter. */
-  rank?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -75,18 +78,39 @@ function splitParam(v: string | undefined, max = 20): string[] {
   return v ? v.split(",").filter(Boolean).slice(0, max) : [];
 }
 
-function buildPlayerMatch(charIds: string[], codes: string[], names: string[]): Record<string, any> {
+function buildPlayerMatch(
+  charIds: string[],
+  codes: string[],
+  names: string[],
+  rankNames: string[] = [],
+): Record<string, any> {
   const match: any = {};
   if (charIds.length === 1) match.characterId = Number(charIds[0]);
   else if (charIds.length > 1) match.characterId = { $in: charIds.map(Number) };
   if (codes.length === 1) match.connectCode = codes[0];
   else if (codes.length > 1) match.connectCode = { $in: codes };
-  if (names.length === 1) {
+  // Rank is an exact displayName match on the tier label; it takes precedence
+  // over a (tag) name prefix on the same slot. They're mutually exclusive in
+  // practice — the rank UI only appears for the anonymized ranked dataset, which
+  // has no real names/tags to search.
+  if (rankNames.length === 1) {
+    match.displayName = rankNames[0];
+  } else if (rankNames.length > 1) {
+    match.displayName = { $in: rankNames };
+  } else if (names.length === 1) {
     match.displayName = { $regex: `^${escapeRegex(names[0])}`, $options: "i" };
   } else if (names.length > 1) {
     match.displayName = { $regex: `^(${names.map(escapeRegex).join("|")})`, $options: "i" };
   }
   return match;
+}
+
+/** Map rank tier keys (e.g. "master") to their displayName labels, dropping
+ *  unknown tiers so a bad param can't poison the query. */
+function rankTierNames(param: string | undefined): string[] {
+  return splitParam(param)
+    .map((r) => RANK_DISPLAY_NAME[r.toLowerCase()])
+    .filter(Boolean);
 }
 
 function prefixMatch(match: Record<string, any>, prefix: string): Record<string, any> {
@@ -114,8 +138,11 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
   const p2Codes = splitParam(params.p2ConnectCode);
   const p2Names = splitParam(params.p2DisplayName);
 
-  const p1Match = buildPlayerMatch(p1CharIds, p1Codes, p1Names);
-  const p2Match = buildPlayerMatch(p2CharIds, p2Codes, p2Names);
+  // Rank tiers fold into the per-side player match (rank IS the displayName in
+  // the ranked dataset), so two-sided rank reuses the same order-independent
+  // matchup logic as the p1-vs-p2 player search below.
+  const p1Match = buildPlayerMatch(p1CharIds, p1Codes, p1Names, rankTierNames(params.p1Rank));
+  const p2Match = buildPlayerMatch(p2CharIds, p2Codes, p2Names, rankTierNames(params.p2Rank));
 
   const hasP1 = Object.keys(p1Match).length > 0;
   const hasP2 = Object.keys(p2Match).length > 0;
@@ -146,19 +173,6 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
     query.source = sources[0];
   } else if (sources.length > 1) {
     query.source = { $in: sources };
-  }
-
-  // Rank (ranked dataset only): each player's displayName encodes their tier, so
-  // this matches "a game containing at least one player of the selected tier(s)".
-  // Cross-tier ranked games exist near boundaries, so a Master game may include a
-  // Diamond opponent. Unknown tiers are dropped (a bad param can't poison it).
-  const rankNames = splitParam(params.rank)
-    .map((r) => RANK_DISPLAY_NAME[r.toLowerCase()])
-    .filter(Boolean);
-  if (rankNames.length === 1) {
-    query["players.displayName"] = rankNames[0];
-  } else if (rankNames.length > 1) {
-    query["players.displayName"] = { $in: rankNames };
   }
 
   if (params.startDate || params.endDate) {

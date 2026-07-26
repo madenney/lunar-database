@@ -60,19 +60,24 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
       filter.source = unique.join(",");
     }
   }
-  // Rank tiers (ranked dataset only). Keep only known tiers; all-tiers is the same
-  // as no rank filter, so drop it (as with source).
-  const rawRank = safeString(body.rank);
-  if (rawRank) {
-    const picked = rawRank
-      .split(",")
-      .map((r) => r.trim().toLowerCase())
-      .filter((r) => (RANK_KEYS as readonly string[]).includes(r));
-    const unique = Array.from(new Set(picked));
-    if (unique.length > 0 && unique.length < RANK_KEYS.length) {
-      filter.rank = unique.join(",");
-    }
-  }
+  // Rank tiers per side (ranked dataset only). Keep only known tiers; all-tiers is
+  // the same as no rank filter for that side, so drop it (as with source).
+  const cleanRank = (raw: string | undefined): string | undefined => {
+    if (!raw) return undefined;
+    const unique = Array.from(
+      new Set(
+        raw
+          .split(",")
+          .map((r) => r.trim().toLowerCase())
+          .filter((r) => (RANK_KEYS as readonly string[]).includes(r)),
+      ),
+    );
+    return unique.length > 0 && unique.length < RANK_KEYS.length ? unique.join(",") : undefined;
+  };
+  const p1Rank = cleanRank(safeString(body.p1Rank));
+  if (p1Rank) filter.p1Rank = p1Rank;
+  const p2Rank = cleanRank(safeString(body.p2Rank));
+  if (p2Rank) filter.p2Rank = p2Rank;
   if (body.maxFiles != null) {
     const n = Number(body.maxFiles);
     if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.floor(n);
