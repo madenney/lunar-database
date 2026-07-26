@@ -7,6 +7,7 @@ const ALLOWED_KEYS = new Set([
   "p1CharacterId", "p1ConnectCode", "p1DisplayName",
   "p2CharacterId", "p2ConnectCode", "p2DisplayName",
   "stageId", "startDate", "endDate", "maxFiles", "maxSizeMb",
+  "source", "rank",
 ]);
 
 export function sanitizeFilters(raw: Record<string, any> | null | undefined): Record<string, string | number> | null {

@@ -84,6 +84,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       startDate: req.query.startDate as string | undefined,
       endDate: req.query.endDate as string | undefined,
       source: req.query.source as string | undefined,
+      rank: req.query.rank as string | undefined,
     };
 
     const finalQuery = buildReplaySearchQuery(params);

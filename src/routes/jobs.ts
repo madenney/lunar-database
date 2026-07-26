@@ -7,7 +7,7 @@ import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { config } from "../config";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
-import { buildReplaySearchQuery } from "../services/replaySearchQuery";
+import { buildReplaySearchQuery, RANK_KEYS } from "../services/replaySearchQuery";
 import { Replay } from "../models/Replay";
 import { SAFE_JOB_ERROR_MESSAGES } from "../utils/sanitizeError";
 
@@ -58,6 +58,19 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
     const unique = Array.from(new Set(picked));
     if (unique.length > 0 && unique.length < REPLAY_SOURCES.length) {
       filter.source = unique.join(",");
+    }
+  }
+  // Rank tiers (ranked dataset only). Keep only known tiers; all-tiers is the same
+  // as no rank filter, so drop it (as with source).
+  const rawRank = safeString(body.rank);
+  if (rawRank) {
+    const picked = rawRank
+      .split(",")
+      .map((r) => r.trim().toLowerCase())
+      .filter((r) => (RANK_KEYS as readonly string[]).includes(r));
+    const unique = Array.from(new Set(picked));
+    if (unique.length > 0 && unique.length < RANK_KEYS.length) {
+      filter.rank = unique.join(",");
     }
   }
   if (body.maxFiles != null) {

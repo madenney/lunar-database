@@ -22,6 +22,8 @@ export interface IJobFilter {
   endDate?: string;
   /** Comma-joined replay sources, e.g. "tournament,ranked". Empty = all. */
   source?: string;
+  /** Comma-joined rank tiers (ranked dataset only), e.g. "master,diamond". */
+  rank?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" sort, so a maxFiles-limited download picks the same first-N the
@@ -80,6 +82,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     startDate: { type: String },
     endDate: { type: String },
     source: { type: String },
+    rank: { type: String },
     maxFiles: { type: Number },
     maxSizeMb: { type: Number },
     sort: { type: String },

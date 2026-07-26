@@ -17,6 +17,10 @@ export interface ReplaySearchParams {
   /** Comma-joined subset of REPLAY_SOURCES, e.g. "tournament,ranked".
    *  Absent/empty means no filter (all sources). */
   source?: string;
+  /** Comma-joined rank tiers (see RANK_KEYS), e.g. "master,diamond". Only
+   *  meaningful for the anonymized ranked dataset, where each player's
+   *  displayName encodes their tier. Absent/empty means no rank filter. */
+  rank?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -25,6 +29,17 @@ export interface ReplaySearchParams {
 }
 
 const SORT_ALLOWLIST = ["startAt", "indexedAt", "duration"];
+
+// Ranked replays are anonymized: each player's displayName is their rank tier
+// rather than a name. These are the only tiers present in the dataset — there is
+// no Bronze/Silver/Gold or Grandmaster data. Keep in sync with RANKS in the
+// frontend's downloadFilters.ts.
+export const RANK_KEYS = ["platinum", "diamond", "master"] as const;
+const RANK_DISPLAY_NAME: Record<string, string> = {
+  platinum: "Platinum Player",
+  diamond: "Diamond Player",
+  master: "Master Player",
+};
 
 /** Parse a "field:dir" sort string into a Mongo sort object (default: newest). */
 export function parseSort(sort?: string): Record<string, 1 | -1> {
@@ -131,6 +146,19 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
     query.source = sources[0];
   } else if (sources.length > 1) {
     query.source = { $in: sources };
+  }
+
+  // Rank (ranked dataset only): each player's displayName encodes their tier, so
+  // this matches "a game containing at least one player of the selected tier(s)".
+  // Cross-tier ranked games exist near boundaries, so a Master game may include a
+  // Diamond opponent. Unknown tiers are dropped (a bad param can't poison it).
+  const rankNames = splitParam(params.rank)
+    .map((r) => RANK_DISPLAY_NAME[r.toLowerCase()])
+    .filter(Boolean);
+  if (rankNames.length === 1) {
+    query["players.displayName"] = rankNames[0];
+  } else if (rankNames.length > 1) {
+    query["players.displayName"] = { $in: rankNames };
   }
 
   if (params.startDate || params.endDate) {
