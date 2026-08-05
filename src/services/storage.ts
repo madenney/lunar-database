@@ -16,6 +16,17 @@ function getClient(): S3Client {
     client = new S3Client({
       region: config.s3Region,
       endpoint: config.s3Endpoint,
+      // Path-style addressing: s3.<region>.backblazeb2.com/<bucket>/<key>, NOT the
+      // default virtual-hosted style <bucket>.s3.<region>.backblazeb2.com/<key>.
+      // Reason (2026-08-05): the host's ISP filter (Spectrum/Charter "CUJO")
+      // blocklisted the bucket-SUBDOMAIN hostname and began hijacking :443 to it —
+      // answering with a plaintext HTTP 302 to a block page instead of passing the
+      // TLS handshake, which surfaced as "write EPROTO ... wrong version number" and
+      // failed every upload. The BASE endpoint host is not blocked, so path-style
+      // (whose SNI/Host is the base endpoint) sidesteps the interception. Backblaze
+      // B2 fully supports path-style (no deprecation, unlike AWS S3). This also
+      // protects any end user behind the same filter downloading a presigned URL.
+      forcePathStyle: true,
       credentials: {
         accessKeyId: config.s3AccessKeyId,
         secretAccessKey: config.s3SecretAccessKey,
