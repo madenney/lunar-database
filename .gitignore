@@ -12,3 +12,8 @@ dev-api.log
 
 # Local-only: security review (contains live attack surface — never publish)
 FINAL_SECURITY_AND_PRODUCTION_REVIEW.md
+
+# Local-only: infra/cost docs — internal LAN IPs, topology, DB-auth state, egress
+# figures. Useful runbooks, but not for the public repo. Kept on disk, untracked.
+SCALING.md
+deploy/MIGRATION.md
