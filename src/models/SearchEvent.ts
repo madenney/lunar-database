@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from "mongoose";
+import { config } from "../config";
 
 export interface ISearchEvent extends Document {
   type: "search" | "estimate" | "player_search";
@@ -28,7 +29,12 @@ const SearchEventSchema = new Schema<ISearchEvent>(
   { timestamps: { createdAt: true, updatedAt: false } }
 );
 
-SearchEventSchema.index({ createdAt: 1 });
+// TTL: expire analytics events (which hold searched connect codes / display
+// names + clientId) after the retention window so behavioral PII isn't kept
+// forever (M3). This also serves as the plain createdAt query index. Changing
+// the value on an existing deployment needs scripts/addEventTtl.ts (a bare
+// createIndex conflicts with the pre-existing non-TTL index).
+SearchEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: config.analyticsRetentionDays * 24 * 60 * 60 });
 SearchEventSchema.index({ type: 1, createdAt: 1 });
 SearchEventSchema.index({ clientId: 1, createdAt: 1 });
 
