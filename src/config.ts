@@ -27,6 +27,15 @@ export const config = {
   jobMaxConcurrentPerClient: parseInt(process.env.JOB_MAX_CONCURRENT_PER_CLIENT || "3", 10),
   jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "50", 10),
 
+  // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
+  // dominate all B2 egress (one client pulled it 4× in a day, almost certainly
+  // failed-download retries). Cap issuances of the full-DB presigned URL per client
+  // per rolling window so one person can't burn multiple TB of egress in an
+  // afternoon. Only applies to isFullDb bundles; normal job/replay downloads are
+  // untouched. Set FULLDB_MAX_PER_WINDOW=0 to disable.
+  fullDbMaxPerWindow: parseInt(process.env.FULLDB_MAX_PER_WINDOW || "2", 10),
+  fullDbWindowHours: parseInt(process.env.FULLDB_WINDOW_HOURS || "24", 10),
+
   // Worker safety limits
   jobTimeoutMinutes: parseInt(process.env.JOB_TIMEOUT_MINUTES || "480", 10),
   slpzBinary: process.env.SLPZ_BINARY || "/usr/local/bin/slpz",

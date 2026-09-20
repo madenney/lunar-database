@@ -3,6 +3,8 @@ import express from "express";
 import http from "http";
 import { Replay } from "../models/Replay";
 import { Job } from "../models/Job";
+import { DownloadEvent } from "../models/DownloadEvent";
+import { config } from "../config";
 import replayRoutes from "./replays";
 import jobRoutes from "./jobs";
 import statsRoutes from "./stats";
@@ -40,7 +42,22 @@ afterAll(async () => {
 afterEach(async () => {
   await Replay.deleteMany({});
   await Job.deleteMany({});
+  await DownloadEvent.deleteMany({});
 });
+
+// Seed a full-DB download event for the throttle tests. Uses the raw collection
+// so we can backdate `createdAt` past mongoose's timestamps plugin.
+async function seedFullDbEvent(clientId: string, ageMs = 0): Promise<void> {
+  await DownloadEvent.collection.insertOne({
+    type: "full_db",
+    jobId: null,
+    replayId: null,
+    clientId,
+    bundleSize: 1_000_000_000_000,
+    replayCount: null,
+    createdAt: new Date(Date.now() - ageMs),
+  });
+}
 
 async function get(path: string, headers?: Record<string, string>): Promise<{ status: number; body: any }> {
   const res = await fetch(`${baseUrl}${path}`, { headers });
@@ -482,6 +499,72 @@ describe("GET /api/jobs/:id/download", () => {
       headers: { "X-Client-Id": TEST_CLIENT_ID },
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/jobs/:id/download — full-DB throttle", () => {
+  async function fullDbJob() {
+    return Job.create({
+      filter: {}, status: "completed", r2Key: "archive/lunar_db_full.zip",
+      pinned: true, isFullDb: true, bundleSize: 1_000_000_000_000,
+      replayCount: 1000, completedAt: new Date(),
+    });
+  }
+  // Downloads can't complete in tests (no S3 creds) — they 500 at presign. The
+  // throttle runs BEFORE that, so a blocked pull is a clean 429 and an allowed
+  // pull is simply "not 429".
+
+  it("429s a client that already hit the cap (default 2/window)", async () => {
+    const job = await fullDbJob();
+    await seedFullDbEvent(TEST_CLIENT_ID);
+    await seedFullDbEvent(TEST_CLIENT_ID);
+
+    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual", headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as any;
+    expect(body.code).toBe("fulldb_rate_limited");
+    expect(body.retryAfterSeconds).toBeGreaterThan(0);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+  });
+
+  it("allows a client still under the cap", async () => {
+    const job = await fullDbJob();
+    await seedFullDbEvent(TEST_CLIENT_ID); // 1 < 2
+
+    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual", headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
+    expect(res.status).not.toBe(429);
+  });
+
+  it("ignores pulls older than the window", async () => {
+    const job = await fullDbJob();
+    const stale = (config.fullDbWindowHours + 1) * 3600 * 1000;
+    await seedFullDbEvent(TEST_CLIENT_ID, stale);
+    await seedFullDbEvent(TEST_CLIENT_ID, stale);
+
+    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual", headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
+    expect(res.status).not.toBe(429);
+  });
+
+  it("does not throttle normal (non-full-DB) bundles", async () => {
+    const job = await Job.create({
+      filter: { p1ConnectCode: "Z#1" }, status: "completed", r2Key: "jobs/z.zip",
+      createdBy: TEST_CLIENT_ID, isFullDb: false, bundleSize: 5000, completedAt: new Date(),
+    });
+    // Even with full-DB pulls over the cap, a normal bundle download is untouched.
+    await seedFullDbEvent(TEST_CLIENT_ID);
+    await seedFullDbEvent(TEST_CLIENT_ID);
+    await seedFullDbEvent(TEST_CLIENT_ID);
+
+    const res = await fetch(`${baseUrl}/api/jobs/${job._id}/download`, {
+      redirect: "manual", headers: { "X-Client-Id": TEST_CLIENT_ID },
+    });
+    expect(res.status).not.toBe(429);
   });
 });
 

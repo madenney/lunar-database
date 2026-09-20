@@ -4,7 +4,8 @@ import { REPLAY_SOURCES } from "../models/Replay";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { getPresignedDownloadUrl, headObject, classifyStorageError } from "../services/storage";
 import { sendError } from "../utils/sendError";
-import { createRateLimiter } from "../utils/rateLimiter";
+import { createRateLimiter, cfKeyGenerator } from "../utils/rateLimiter";
+import { checkFullDbDownloadLimit, recordAnonymousFullDbDownload, formatRetryAfter } from "../services/fullDbLimiter";
 import { config } from "../config";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { buildReplaySearchQuery, RANK_KEYS } from "../services/replaySearchQuery";
@@ -450,6 +451,22 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       return;
     }
 
+    // Full-DB throttle: cap how many ~1.3 TB pulls one caller can trigger per
+    // window (see fullDbLimiter). Checked before the B2 HEAD so a rate-limited
+    // caller costs us nothing. Only full-DB bundles are affected.
+    if (job.isFullDb) {
+      const limit = await checkFullDbDownloadLimit(clientId, cfKeyGenerator(req));
+      if (!limit.allowed) {
+        res.setHeader("Retry-After", String(limit.retryAfterSeconds));
+        res.status(429).json({
+          code: "fulldb_rate_limited",
+          error: `The full database can be downloaded ${config.fullDbMaxPerWindow}× per ${config.fullDbWindowHours}h. Please try again in ${formatRetryAfter(limit.retryAfterSeconds)}.`,
+          retryAfterSeconds: limit.retryAfterSeconds,
+        });
+        return;
+      }
+    }
+
     // Best-effort cap pre-check: a HEAD lets us surface a B2 daily-cap (503) so the
     // client shows the cap message instead of a URL that 503s mid-download. This
     // FAILS OPEN — only a definite cap signal blocks; any other probe error (missing
@@ -470,7 +487,9 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
     // Increment download counter and update last download timestamp
     Job.updateOne({ _id: job._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec().catch(() => {});
 
-    // Log download event for analytics (full-DB pulls tagged distinctly).
+    // Log download event for analytics (full-DB pulls tagged distinctly). This
+    // DownloadEvent is also what the full-DB throttle counts for identified
+    // clients; anonymous pulls are counted in-memory, so record those here too.
     DownloadEvent.create({
       type: job.isFullDb ? "full_db" : "job",
       jobId: job._id,
@@ -478,6 +497,7 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       bundleSize: job.bundleSize,
       replayCount: job.replayCount,
     }).catch(() => {});
+    if (job.isFullDb && !clientId) recordAnonymousFullDbDownload(cfKeyGenerator(req));
 
     // `filename` is a cosmetic, caller-supplied name for the saved file; it's
     // sanitized + forced to `.zip` inside getPresignedDownloadUrl. Passing it
