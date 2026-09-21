@@ -1,0 +1,10 @@
+# gitleaks config for CI secret scanning (scans the committed tree).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public API docs carry illustrative example tokens (fake JWTs shown in request examples), not real secrets. Real secrets live only in the gitignored .env."
+paths = [
+  '''(^|/)ADMIN_API\.md$''',
+  '''(^|/)API\.md$''',
+]
