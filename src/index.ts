@@ -11,6 +11,7 @@ import { cleanupJobTemp, cleanupOrphanedTemp } from "./services/bundler";
 import { startCompressor, stopCompressor } from "./workers/compressWorker";
 import { startUploader, stopUploader } from "./workers/uploadWorker";
 import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
+import { startReaper, stopReaper } from "./workers/reaperWorker";
 import { startHealthMonitor, stopHealthMonitor } from "./services/healthMonitor";
 import { getCachedHealth } from "./services/healthCheck";
 import { validateClientId } from "./middleware/validateClientId";
@@ -220,6 +221,7 @@ async function main() {
   startCompressor();
   startUploader();
   startCleanupWorker();
+  startReaper();
   startHealthMonitor();
 
   // Graceful shutdown
@@ -232,6 +234,7 @@ async function main() {
     stopCompressor();
     stopUploader();
     stopCleanupWorker();
+    stopReaper();
     stopHealthMonitor();
 
     server.close(() => {
