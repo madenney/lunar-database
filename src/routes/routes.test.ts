@@ -415,8 +415,10 @@ describe("GET /api/jobs/:id", () => {
   });
 
   it("returns queuePosition and ETAs for pending jobs", async () => {
-    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID });
-    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID });
+    // Explicit, distinct createdAt so queue ordering is deterministic — created
+    // back-to-back these can share a millisecond and tie the "jobs ahead" count.
+    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:00.000Z") });
+    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:01.000Z") });
 
     // job1 is first (created earlier), job2 is second
     const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });

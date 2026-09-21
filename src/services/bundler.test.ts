@@ -39,11 +39,10 @@ jest.mock("child_process", () => ({
       }
       callback(null, { stdout: "", stderr: "" });
     } else if (cmd === "zip") {
-      // Simulate zip -0 -j <output.zip> <files...>
-      const zipPath = args[2]; // zip -0 -j <zipPath> ...files
-      const files = args.slice(3);
-      const contents = files.map((f) => path.basename(f)).join(",");
-      fs.writeFileSync(zipPath, `zip-mock: ${contents}`);
+      // bundler runs: zip -0 -r -q <output.zip> .   (cwd = the job's .slpz dir).
+      // Match on the .zip arg so this is robust to flag order.
+      const zipPath = args.find((a) => a.endsWith(".zip"));
+      if (zipPath) fs.writeFileSync(zipPath, "zip-mock");
       callback(null, { stdout: "", stderr: "" });
     } else if (cmd === "df") {
       // Return plenty of free space (10GB)
