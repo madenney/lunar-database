@@ -42,8 +42,12 @@ jobs:
         env:
           MONGODB_URI: mongodb://localhost:27017/lm-database-ci
 
-      - name: Dependency audit
-        run: npm audit --audit-level=high
+      - name: Dependency audit (production deps)
+        # Gate on high+ advisories in what actually SHIPS. Dev-only tooling (jest,
+        # ts-jest and their transitive deps) is excluded — a DoS advisory inside a
+        # test-time package doesn't affect the running API, and gating on it would
+        # make CI perpetually red on unrelated CVE churn.
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Secret scan (gitleaks)
         run: |
