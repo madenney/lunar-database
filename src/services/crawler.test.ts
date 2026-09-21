@@ -1,62 +1,45 @@
-import fs from "fs";
-import path from "path";
-import os from "os";
+import { Replay } from "../models/Replay";
+import { saveBatch } from "./crawler";
 
-// We test the walkDir generator and parseOneFile logic without touching MongoDB
-// by importing the module and testing the pure functions
+// L5: the crawler must skip duplicate-key errors but never swallow real ones.
+describe("crawler saveBatch — non-duplicate error handling (L5)", () => {
+  let insertSpy: jest.SpyInstance;
+  let errSpy: jest.SpyInstance;
 
-describe("crawler", () => {
-  const tmpDir = path.join(os.tmpdir(), "lm-test-crawl-" + process.pid);
-
-  beforeAll(() => {
-    // Create a fake directory tree with some .slp files (just empty files)
-    fs.mkdirSync(path.join(tmpDir, "sub1"), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, "sub2"), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, "a.slp"), "");
-    fs.writeFileSync(path.join(tmpDir, "b.txt"), "");
-    fs.writeFileSync(path.join(tmpDir, "sub1", "c.slp"), "");
-    fs.writeFileSync(path.join(tmpDir, "sub2", "d.slp"), "");
-    fs.writeFileSync(path.join(tmpDir, "sub2", "e.zip"), "");
+  beforeEach(() => {
+    insertSpy = jest.spyOn(Replay, "insertMany").mockResolvedValue([] as any);
+    errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    insertSpy.mockRestore();
+    errSpy.mockRestore();
   });
 
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true });
+  it("reports no errors on success", async () => {
+    expect(await saveBatch([{}])).toEqual({ nonDupErrors: 0 });
   });
 
-  it("walkDir yields only .slp files recursively", () => {
-    // Re-implement walkDir here since it's not exported — test the same logic
-    function* walkDir(dir: string): Generator<string> {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          yield* walkDir(fullPath);
-        } else if (entry.name.endsWith(".slp")) {
-          yield fullPath;
-        }
-      }
-    }
-
-    const files = [...walkDir(tmpDir)];
-    expect(files.length).toBe(3);
-    expect(files.every((f) => f.endsWith(".slp"))).toBe(true);
+  it("silently skips an all-duplicate batch", async () => {
+    insertSpy.mockRejectedValue({ writeErrors: [{ code: 11000 }, { code: 11000 }] });
+    expect(await saveBatch([{}, {}])).toEqual({ nonDupErrors: 0 });
+    expect(errSpy).not.toHaveBeenCalled();
   });
 
-  it("does not yield non-.slp files", () => {
-    function* walkDir(dir: string): Generator<string> {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          yield* walkDir(fullPath);
-        } else if (entry.name.endsWith(".slp")) {
-          yield fullPath;
-        }
-      }
-    }
+  it("surfaces + counts real errors mixed with dups, without throwing", async () => {
+    insertSpy.mockRejectedValue({
+      writeErrors: [{ code: 11000 }, { code: 121, errmsg: "doc failed validation" }],
+    });
+    expect(await saveBatch([{}, {}])).toEqual({ nonDupErrors: 1 });
+    expect(errSpy).toHaveBeenCalledTimes(1);
+  });
 
-    const files = [...walkDir(tmpDir)];
-    expect(files.some((f) => f.endsWith(".txt"))).toBe(false);
-    expect(files.some((f) => f.endsWith(".zip"))).toBe(false);
+  it("re-throws a non-bulk error that isn't a duplicate", async () => {
+    insertSpy.mockRejectedValue({ code: 91, message: "connection lost" });
+    await expect(saveBatch([{}])).rejects.toBeDefined();
+  });
+
+  it("skips a lone duplicate error with no writeErrors array", async () => {
+    insertSpy.mockRejectedValue({ code: 11000 });
+    expect(await saveBatch([{}])).toEqual({ nonDupErrors: 0 });
   });
 });

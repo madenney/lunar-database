@@ -67,8 +67,9 @@ export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<
 
     while (saveBuf.length >= SAVE_BATCH) {
       const toSave = saveBuf.splice(0, SAVE_BATCH);
-      await saveBatch(toSave);
-      indexed += toSave.length;
+      const { nonDupErrors } = await saveBatch(toSave);
+      indexed += toSave.length - nonDupErrors;
+      errors += nonDupErrors;
       console.log(`Indexed: ${indexed}, Errors: ${errors}`);
     }
   }
@@ -114,8 +115,9 @@ export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<
   await flushWorkers();
 
   if (saveBuf.length > 0) {
-    await saveBatch(saveBuf);
-    indexed += saveBuf.length;
+    const { nonDupErrors } = await saveBatch(saveBuf);
+    indexed += saveBuf.length - nonDupErrors;
+    errors += nonDupErrors;
   }
 
   // Terminate workers
@@ -124,12 +126,30 @@ export async function crawl(rootDir?: string, opts: CrawlOptions = {}): Promise<
   console.log(`Done. Indexed: ${indexed}, Skipped: ${skipped}, Errors: ${errors}`);
 }
 
-async function saveBatch(batch: any[]) {
+/**
+ * Insert a batch of replays, tolerating duplicate keys (re-crawling existing files)
+ * but SURFACING every other write error instead of swallowing it (L5). Returns the
+ * count of real (non-duplicate) failures so the caller can tally them; a few bad
+ * docs are logged + counted, not fatal to the crawl.
+ */
+export async function saveBatch(batch: any[]): Promise<{ nonDupErrors: number }> {
   try {
     await Replay.insertMany(batch, { ordered: false });
+    return { nonDupErrors: 0 };
   } catch (err: any) {
-    if (err.code !== 11000) {
+    // ordered:false aggregates per-document failures in `writeErrors`. A non-bulk
+    // error (e.g. a connection drop) has none — re-throw it unless it's a lone dup.
+    const writeErrors: any[] = err?.writeErrors ?? [];
+    if (writeErrors.length === 0) {
+      if (err?.code === 11000) return { nonDupErrors: 0 };
       throw err;
     }
+    const nonDup = writeErrors.filter((we) => (we.code ?? we.err?.code) !== 11000);
+    for (const we of nonDup) {
+      console.error(
+        `[crawler] insert failed (code ${we.code ?? we.err?.code}): ${we.errmsg ?? we.err?.errmsg ?? we.message ?? "unknown"}`
+      );
+    }
+    return { nonDupErrors: nonDup.length };
   }
 }
