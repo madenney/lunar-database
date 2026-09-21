@@ -84,9 +84,10 @@ export async function processNextCompression(): Promise<boolean> {
     await cursor.close();
 
     if (filePaths.length === 0) {
-      job.status = "failed";
-      job.error = "No replays matched the filter";
-      await job.save();
+      await Job.updateOne(
+        { _id: jobId, status: "processing" },
+        { status: "failed", error: "No replays matched the filter" }
+      );
       return true;
     }
 
@@ -100,17 +101,24 @@ export async function processNextCompression(): Promise<boolean> {
       throw new Error(`Job timed out after ${config.jobTimeoutMinutes} minutes (during query phase)`);
     }
 
-    // replayIds is no longer materialised — a large job's ID array would exceed
-    // MongoDB's 16MB per-document limit. The bundle is built straight from the
-    // streamed filePaths, so we only record the count + total size.
-    job.replayIds = [];
-    job.replayCount = filePaths.length;
-    job.estimatedSize = rawSize;
-
-    // Bundling step (gather cached .slpz, compress any misses)
-    job.status = "bundling";
-    job.progress = { step: "bundling", filesProcessed: 0, filesTotal: filePaths.length };
-    await job.save();
+    // Move processing → bundling atomically (updateOne, not job.save, so a stale
+    // in-memory status can't clobber a concurrent cancel — M1). If it no longer
+    // matches, a cancel raced us; abort before doing the expensive bundle.
+    // replayIds stays [] — a large job's ID array would exceed the 16MB doc limit.
+    const started = await Job.updateOne(
+      { _id: jobId, status: "processing" },
+      {
+        status: "bundling",
+        replayIds: [],
+        replayCount: filePaths.length,
+        estimatedSize: rawSize,
+        progress: { step: "bundling", filesProcessed: 0, filesTotal: filePaths.length },
+      }
+    );
+    if (started.matchedCount === 0) {
+      console.log(`Job ${jobId} no longer processing (cancelled?) — aborting before bundle`);
+      return true;
+    }
 
     const { zipPath, size, cacheHits } = await createBundle(filePaths, jobId, (processed, total) => {
       // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
@@ -132,12 +140,18 @@ export async function processNextCompression(): Promise<boolean> {
       return true;
     }
 
-    // Mark as bundled — uploader will pick it up
-    job.status = "bundled";
-    job.bundlePath = zipPath;
-    job.bundleSize = size;
-    job.progress = null;
-    await job.save();
+    // Mark bundled only if still bundling — otherwise a cancel raced us; discard
+    // the freshly built bundle instead of letting the uploader pick it up and
+    // bill B2 for a cancelled job (M1).
+    const bundled = await Job.updateOne(
+      { _id: jobId, status: "bundling" },
+      { status: "bundled", bundlePath: zipPath, bundleSize: size, progress: null }
+    );
+    if (bundled.matchedCount === 0) {
+      console.log(`Job ${jobId} no longer bundling (cancelled?) — discarding bundle`);
+      cleanupJobTemp(jobId);
+      return true;
+    }
 
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
@@ -148,18 +162,14 @@ export async function processNextCompression(): Promise<boolean> {
   } catch (err) {
     const rawMsg = (err as Error).message;
     const safeMsg = sanitizeJobErrorMessage(rawMsg);
-    try {
-      job.status = "failed";
-      job.error = safeMsg;
-      job.progress = null;
-      await job.save();
-    } catch (saveErr) {
-      console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message);
-      await Job.updateOne(
-        { _id: jobId },
-        { status: "failed", error: safeMsg, progress: null }
-      ).catch(() => {});
-    }
+    // Mark failed only if still in this worker's active states — never clobber a
+    // cancel/bundled that already landed (M1).
+    await Job.updateOne(
+      { _id: jobId, status: { $in: ["processing", "bundling"] } },
+      { status: "failed", error: safeMsg, progress: null }
+    ).catch((saveErr) =>
+      console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message)
+    );
 
     cleanupJobTemp(jobId);
 

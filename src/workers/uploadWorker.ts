@@ -43,10 +43,14 @@ export async function processNextUpload(): Promise<boolean> {
       throw new Error("bundlePath is outside jobTempDir");
     }
 
-    // Uploading step
+    // Uploading step. Use updateOne (not job.save) so we write only `progress` —
+    // a full-doc save would rewrite `status` from the stale in-memory doc and
+    // could clobber a concurrent cancel (M1). Same reasoning for every write below.
     const totalBytes = job.bundleSize ?? 0;
-    job.progress = { step: "uploading", filesProcessed: 0, filesTotal: 1, bytesUploaded: 0, bytesTotal: totalBytes };
-    await job.save();
+    await Job.updateOne(
+      { _id: jobId, status: "uploading" },
+      { progress: { step: "uploading", filesProcessed: 0, filesTotal: 1, bytesUploaded: 0, bytesTotal: totalBytes } }
+    );
 
     const r2Key = `jobs/${jobId}.zip`;
     let lastReportedPct = 0;
@@ -75,11 +79,21 @@ export async function processNextUpload(): Promise<boolean> {
       return true;
     }
 
-    job.status = "completed";
-    job.r2Key = r2Key;
-    job.progress = null;
-    job.completedAt = new Date();
-    await job.save();
+    // Complete atomically, only if still uploading. If a cancel landed in the race
+    // window since the checkpoint above, this no-ops and we tear down rather than
+    // resurrecting the job with a live (billed) B2 object (M1).
+    const completed = await Job.updateOne(
+      { _id: jobId, status: "uploading" },
+      { status: "completed", r2Key, progress: null, completedAt: new Date() }
+    );
+    if (completed.matchedCount === 0) {
+      console.log(`Job ${jobId} no longer uploading (cancelled?) — deleting R2 object`);
+      await deleteFromStorage(r2Key).catch((err) =>
+        console.error(`Failed to delete storage key ${r2Key}:`, err.message)
+      );
+      cleanupJobTemp(jobId);
+      return true;
+    }
 
     // Clean up local temp files
     cleanupJobTemp(jobId);
@@ -90,18 +104,14 @@ export async function processNextUpload(): Promise<boolean> {
   } catch (err) {
     const rawMsg = (err as Error).message;
     const safeMsg = sanitizeJobErrorMessage(rawMsg);
-    try {
-      job.status = "failed";
-      job.error = safeMsg;
-      job.progress = null;
-      await job.save();
-    } catch (saveErr) {
-      console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message);
-      await Job.updateOne(
-        { _id: jobId },
-        { status: "failed", error: safeMsg, progress: null }
-      ).catch(() => {});
-    }
+    // Mark failed only if still uploading — never clobber a cancel/complete that
+    // already landed (M1).
+    await Job.updateOne(
+      { _id: jobId, status: "uploading" },
+      { status: "failed", error: safeMsg, progress: null }
+    ).catch((saveErr) =>
+      console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message)
+    );
 
     cleanupJobTemp(jobId);
 
