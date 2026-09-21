@@ -36,16 +36,28 @@ export async function pinBundle(jobId: string): Promise<PinResult> {
     throw new PinError(400, "Only completed bundles with a live download can be pinned");
   }
 
-  // Relocate to archive/ only if it isn't already there.
+  // Relocate to archive/ only if it isn't already there. Order matters (M2):
+  // copy → persist → delete. We only ever point the DB at an object that already
+  // exists, so a crash mid-operation can't strand the bundle. Worst case is a
+  // short-lived orphan of the old jobs/ object, which the lifecycle rule expires.
+  let oldKey: string | null = null;
   if (!job.r2Key.startsWith(ARCHIVE_PREFIX)) {
     const destKey = withPrefix(job.r2Key, ARCHIVE_PREFIX);
     await copyObject(job.r2Key, destKey);
-    await deleteFromStorage(job.r2Key);
+    oldKey = job.r2Key;
     job.r2Key = destKey;
   }
 
   job.pinned = true;
   await job.save();
+
+  if (oldKey) {
+    // Best-effort: the DB already points at the (existing) archive/ copy, so a
+    // failure here only leaves an orphan, never a broken download.
+    await deleteFromStorage(oldKey).catch((err) =>
+      console.error(`pinBundle: pinned ${jobId} but failed to delete old object ${oldKey}:`, (err as Error).message)
+    );
+  }
   return { jobId: job._id.toString(), pinned: true, r2Key: job.r2Key };
 }
 
@@ -57,14 +69,24 @@ export async function unpinBundle(jobId: string): Promise<PinResult> {
   const job = await Job.findById(jobId);
   if (!job) throw new PinError(404, "Job not found");
 
+  // copy → persist → delete (M2), same reasoning as pinBundle. Here the orphan
+  // on a failed delete is an archive/ object (no lifecycle expiry), so it's logged
+  // for manual cleanup — but the download is never broken.
+  let oldKey: string | null = null;
   if (job.r2Key && job.r2Key.startsWith(ARCHIVE_PREFIX)) {
     const destKey = withPrefix(job.r2Key, EPHEMERAL_PREFIX);
     await copyObject(job.r2Key, destKey);
-    await deleteFromStorage(job.r2Key);
+    oldKey = job.r2Key;
     job.r2Key = destKey;
   }
 
   job.pinned = false;
   await job.save();
+
+  if (oldKey) {
+    await deleteFromStorage(oldKey).catch((err) =>
+      console.error(`unpinBundle: unpinned ${jobId} but failed to delete old object ${oldKey}:`, (err as Error).message)
+    );
+  }
   return { jobId: job._id.toString(), pinned: false, r2Key: job.r2Key };
 }
