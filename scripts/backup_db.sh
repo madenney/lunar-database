@@ -24,6 +24,12 @@ MONGODUMP="/usr/bin/mongodump"
 # ping = failure caught. Set via env: BACKUP_HEALTHCHECK_URL=...
 HEALTHCHECK_URL="${BACKUP_HEALTHCHECK_URL:-}"
 
+# Mongo connection: prefer the app's authenticated URI from .env (the prod DB on the
+# worker runs with auth); fall back to a plain --db for a no-auth local instance.
+ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env"
+MONGODB_URI=""
+[ -f "$ENV_FILE" ] && MONGODB_URI="$(grep -m1 '^MONGODB_URI=' "$ENV_FILE" | cut -d= -f2- || true)"
+
 # --- run ---
 TS="$(date -u +%Y/%m/%d_%H%M%S)"
 DEST="${RCLONE_REMOTE}:${BUCKET}/${PREFIX}/${TS}.gz.age"
@@ -31,7 +37,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT      # transient scratch only; nothing persists locally
 
 echo "[$(date -uIs)] dumping $DB ..."
-"$MONGODUMP" --db="$DB" --gzip --archive="$TMP/dump.gz" --quiet
+if [ -n "$MONGODB_URI" ]; then
+  "$MONGODUMP" --uri="$MONGODB_URI" --gzip --archive="$TMP/dump.gz" --quiet
+else
+  "$MONGODUMP" --db="$DB" --gzip --archive="$TMP/dump.gz" --quiet
+fi
 
 echo "[$(date -uIs)] encrypting (age) ..."
 "$AGE" -r "$AGE_RECIPIENT" -o "$TMP/dump.gz.age" "$TMP/dump.gz"
