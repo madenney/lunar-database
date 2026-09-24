@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
-import { Job, IJobFilter } from "../models/Job";
-import { REPLAY_SOURCES } from "../models/Replay";
+import { Job, ACTIVE_JOB_STATUSES } from "../models/Job";
+import { sendApiError } from "../utils/apiErrors";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { getPresignedDownloadUrl, headObject, classifyStorageError } from "../services/storage";
 import { sendError } from "../utils/sendError";
@@ -8,7 +8,8 @@ import { createRateLimiter, cfKeyGenerator } from "../utils/rateLimiter";
 import { checkFullDbDownloadLimit, recordAnonymousFullDbDownload, formatRetryAfter } from "../services/fullDbLimiter";
 import { config } from "../config";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
-import { buildReplaySearchQuery, RANK_KEYS } from "../services/replaySearchQuery";
+import { resolveSelection } from "../services/replaySearchQuery";
+import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
 import { Replay } from "../models/Replay";
 import { SAFE_JOB_ERROR_MESSAGES } from "../utils/sanitizeError";
 
@@ -26,69 +27,6 @@ const USER_FACING_ERRORS = [...SAFE_JOB_ERROR_MESSAGES];
 function sanitizeJobError(error: string): string {
   if (USER_FACING_ERRORS.some((msg) => error.startsWith(msg))) return error;
   return "Server error — please try again later";
-}
-
-const MAX_FILTER_STRING_LEN = 100;
-
-function safeString(val: unknown, maxLen = MAX_FILTER_STRING_LEN): string | undefined {
-  if (val == null) return undefined;
-  if (typeof val !== "string" && typeof val !== "number") return undefined;
-  return String(val).slice(0, maxLen);
-}
-
-export function parseFilter(body: Record<string, any>): IJobFilter {
-  const filter: IJobFilter = {};
-  const p1cc = safeString(body.p1ConnectCode); if (p1cc) filter.p1ConnectCode = p1cc;
-  const p1ci = safeString(body.p1CharacterId); if (p1ci) filter.p1CharacterId = p1ci;
-  const p1dn = safeString(body.p1DisplayName); if (p1dn) filter.p1DisplayName = p1dn;
-  const p2cc = safeString(body.p2ConnectCode); if (p2cc) filter.p2ConnectCode = p2cc;
-  const p2ci = safeString(body.p2CharacterId); if (p2ci) filter.p2CharacterId = p2ci;
-  const p2dn = safeString(body.p2DisplayName); if (p2dn) filter.p2DisplayName = p2dn;
-  const sid = safeString(body.stageId); if (sid) filter.stageId = sid;
-  const sd = safeString(body.startDate); if (sd) filter.startDate = sd;
-  const ed = safeString(body.endDate); if (ed) filter.endDate = ed;
-  // Replay source: keep only known values. Selecting every source is the same as
-  // no filter, so drop it — otherwise it would satisfy the "at least one filter"
-  // guard below and let a client queue a whole-database job.
-  const rawSources = safeString(body.source);
-  if (rawSources) {
-    const picked = rawSources
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => (REPLAY_SOURCES as string[]).includes(s));
-    const unique = Array.from(new Set(picked));
-    if (unique.length > 0 && unique.length < REPLAY_SOURCES.length) {
-      filter.source = unique.join(",");
-    }
-  }
-  // Rank tiers per side (ranked dataset only). Keep only known tiers; all-tiers is
-  // the same as no rank filter for that side, so drop it (as with source).
-  const cleanRank = (raw: string | undefined): string | undefined => {
-    if (!raw) return undefined;
-    const unique = Array.from(
-      new Set(
-        raw
-          .split(",")
-          .map((r) => r.trim().toLowerCase())
-          .filter((r) => (RANK_KEYS as readonly string[]).includes(r)),
-      ),
-    );
-    return unique.length > 0 && unique.length < RANK_KEYS.length ? unique.join(",") : undefined;
-  };
-  const p1Rank = cleanRank(safeString(body.p1Rank));
-  if (p1Rank) filter.p1Rank = p1Rank;
-  const p2Rank = cleanRank(safeString(body.p2Rank));
-  if (p2Rank) filter.p2Rank = p2Rank;
-  if (body.maxFiles != null) {
-    const n = Number(body.maxFiles);
-    if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.floor(n);
-  }
-  if (body.maxSizeMb != null) {
-    const n = Number(body.maxSizeMb);
-    if (Number.isFinite(n) && n > 0) filter.maxSizeMb = Math.min(n, 10000);
-  }
-  const srt = safeString(body.sort); if (srt) filter.sort = srt;
-  return filter;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -134,23 +72,22 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId || !UUID_RE.test(clientId)) {
-      res.status(400).json({ error: "Valid X-Client-Id header (UUID) is required" });
+      sendApiError(res, 400, "invalid_client");
       return;
     }
 
     const filter = parseFilter(req.body);
 
-    const filterKeys = Object.keys(filter).filter((k) => k !== "maxFiles" && k !== "maxSizeMb" && k !== "sort");
-    const hasLimit = filter.maxFiles != null || filter.maxSizeMb != null;
-    if (filterKeys.length === 0 && !hasLimit) {
-      res.status(400).json({ error: "Add at least one filter or a limit" });
+    const { hasFilter, hasLimit } = hasFilterOrLimit(filter);
+    if (!hasFilter && !hasLimit) {
+      sendApiError(res, 400, "filter_required");
       return;
     }
 
     const { count, rawSize } = await queryCountAndSize(filter);
 
     if (count === 0) {
-      res.status(400).json({ error: "No replays match this filter" });
+      sendApiError(res, 400, "no_matches");
       return;
     }
 
@@ -158,11 +95,12 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     if (clientId) {
       const activeCount = await Job.countDocuments({
         createdBy: clientId,
-        status: { $in: ["pending", "processing", "bundling", "bundled", "uploading"] },
+        status: { $in: ACTIVE_JOB_STATUSES },
       });
       if (activeCount >= config.jobMaxConcurrentPerClient) {
-        res.status(429).json({
+        sendApiError(res, 429, "too_many_active_jobs", {
           error: `You already have ${activeCount} active job(s). Maximum is ${config.jobMaxConcurrentPerClient}. Wait for one to finish or cancel it.`,
+          limit: config.jobMaxConcurrentPerClient,
         });
         return;
       }
@@ -171,9 +109,7 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     // Global queue depth limit
     const pendingCount = await Job.countDocuments({ status: "pending" });
     if (pendingCount >= config.jobMaxPendingTotal) {
-      res.status(429).json({
-        error: `Job queue is full (${pendingCount} pending). Try again later.`,
-      });
+      sendApiError(res, 429, "queue_full");
       return;
     }
 
@@ -184,8 +120,9 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     // filter narrows it; for a limit-only job the uncapped total is the entire DB,
     // so skip that (potentially full-collection) count.
     let totalMatched = count;
-    if (hasLimit && filterKeys.length > 0) {
-      totalMatched = await Replay.countDocuments(buildReplaySearchQuery(filter)).maxTimeMS(15000);
+    if (hasLimit && hasFilter) {
+      const { query } = await resolveSelection(filter);
+      totalMatched = await Replay.countDocuments(query).maxTimeMS(15000);
     }
 
     const job = await Job.create({
@@ -208,7 +145,7 @@ router.get("/", jobListLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId) {
-      res.status(400).json({ error: "X-Client-Id header is required" });
+      sendApiError(res, 400, "invalid_client");
       return;
     }
 
@@ -285,31 +222,29 @@ router.delete("/:id", jobDeleteLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId) {
-      res.status(400).json({ error: "X-Client-Id header is required" });
+      sendApiError(res, 400, "invalid_client");
       return;
     }
 
-    const job = await Job.findById(req.params.id);
+    // One conditional update, so a worker finishing the job at the same moment
+    // can't be overwritten (which would orphan its uploaded bundle).
+    const cancelled = await Job.findOneAndUpdate(
+      { _id: req.params.id, createdBy: clientId, status: { $in: ACTIVE_JOB_STATUSES } },
+      { $set: { status: "cancelled", progress: null } },
+    );
+    if (cancelled) {
+      res.json({ message: "Job cancelled" });
+      return;
+    }
+
+    const job = await Job.findById(req.params.id).select("createdBy status").lean();
     if (!job) {
-      res.status(404).json({ error: "Job not found" });
-      return;
+      sendApiError(res, 404, "not_found");
+    } else if (job.createdBy !== clientId) {
+      sendApiError(res, 403, "forbidden");
+    } else {
+      sendApiError(res, 400, "cannot_cancel", { error: `Cannot cancel a ${job.status} job`, status: job.status });
     }
-
-    if (job.createdBy !== clientId) {
-      res.status(403).json({ error: "Not your job" });
-      return;
-    }
-
-    if (job.status !== "pending" && job.status !== "processing" && job.status !== "bundling" && job.status !== "bundled" && job.status !== "uploading") {
-      res.status(400).json({ error: `Cannot cancel a ${job.status} job` });
-      return;
-    }
-
-    job.status = "cancelled";
-    job.progress = null;
-    await job.save();
-
-    res.json({ message: "Job cancelled" });
   } catch (err) {
     sendError(res, err);
   }
@@ -320,14 +255,14 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
-      res.status(404).json({ error: "Job not found" });
+      sendApiError(res, 404, "not_found");
       return;
     }
 
     // Ownership check — require matching clientId
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId || job.createdBy !== clientId) {
-      res.status(403).json({ error: "Not authorized to view this job" });
+      sendApiError(res, 403, "forbidden");
       return;
     }
 
@@ -434,7 +369,7 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
   try {
     const job = await Job.findById(req.params.id);
     if (!job) {
-      res.status(404).json({ error: "Job not found" });
+      sendApiError(res, 404, "not_found");
       return;
     }
 
@@ -442,12 +377,12 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
     // which are a public catalog ("Popular Downloads") any visitor may download.
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!job.pinned && (!clientId || job.createdBy !== clientId)) {
-      res.status(403).json({ error: "Not authorized to download this job" });
+      sendApiError(res, 403, "forbidden");
       return;
     }
 
     if (job.status !== "completed" || !job.r2Key) {
-      res.status(400).json({ error: "Download not ready" });
+      sendApiError(res, 400, "not_ready");
       return;
     }
 
@@ -458,8 +393,7 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       const limit = await checkFullDbDownloadLimit(clientId, cfKeyGenerator(req));
       if (!limit.allowed) {
         res.setHeader("Retry-After", String(limit.retryAfterSeconds));
-        res.status(429).json({
-          code: "fulldb_rate_limited",
+        sendApiError(res, 429, "fulldb_rate_limited", {
           error: `The full database can be downloaded ${config.fullDbMaxPerWindow}× per ${config.fullDbWindowHours}h. Please try again in ${formatRetryAfter(limit.retryAfterSeconds)}.`,
           retryAfterSeconds: limit.retryAfterSeconds,
         });
@@ -467,21 +401,27 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       }
     }
 
-    // Best-effort cap pre-check: a HEAD lets us surface a B2 daily-cap (503) so the
-    // client shows the cap message instead of a URL that 503s mid-download. This
-    // FAILS OPEN — only a definite cap signal blocks; any other probe error (missing
-    // object, transient B2 blip, no creds in tests) is ignored and we still hand out
-    // the URL, preserving the long-standing "presign regardless" behavior. (B2
-    // enforces the cap on the actual byte transfer, so a full-DB pull counts against
-    // egress like any other download.)
+    // Best-effort pre-check: a HEAD lets us report a definite storage problem
+    // instead of handing out a URL that fails mid-download. It FAILS OPEN: any
+    // unclassified probe error (network blip, no creds in tests) still presigns.
+    // (B2 enforces the cap on the actual byte transfer, so a full-DB pull counts
+    // against egress like any other download.)
     try {
       await headObject(job.r2Key);
     } catch (probeErr) {
-      if (classifyStorageError(probeErr) === "cap") {
-        res.status(503).json({ code: "download_cap", error: "Daily download limit reached — please try again tomorrow." });
+      const kind = classifyStorageError(probeErr);
+      if (kind === "cap") {
+        sendApiError(res, 503, "download_cap");
         return;
       }
-      // notfound / transient / other → fail open, proceed to presign.
+      if (kind === "busy") {
+        sendApiError(res, 503, "storage_busy");
+        return;
+      }
+      if (kind === "notfound") {
+        sendApiError(res, 410, "bundle_missing");
+        return;
+      }
     }
 
     // Increment download counter and update last download timestamp

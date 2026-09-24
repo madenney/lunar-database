@@ -1,8 +1,8 @@
 /**
  * Builds a MongoDB query from replay search parameters.
- * Shared by GET /api/replays, POST /api/replays/estimate, and the bundle worker.
+ * Shared by GET /api/replays, POST /api/replays/estimate, POST /api/jobs and the bundle worker.
  */
-import { REPLAY_SOURCES } from "../models/Replay";
+import { Replay, REPLAY_SOURCES } from "../models/Replay";
 
 export interface ReplaySearchParams {
   p1CharacterId?: string;
@@ -56,26 +56,35 @@ export function parseSort(sort?: string): Record<string, 1 | -1> {
 }
 
 /**
- * Build the search query AND its sort object together, for endpoints that need a
- * limited result set in sort order (estimate + download worker). Mirrors the list
- * endpoint: when sorting by ascending date, null/undated replays are excluded so
- * the "oldest N" are genuinely the oldest dated games (Mongo sorts nulls first).
+ * The query and sort for the replays a search selects. The list, estimate, job
+ * creation and bundle worker all use this, so they agree on the same set.
+ *
+ * Ascending date order excludes undated replays: Mongo sorts nulls first, which
+ * would flood "oldest" with undated games. That exclusion must never empty a
+ * search, though. The whole `ranked` source is undated (anonymisation stripped
+ * its metadata), so when nothing dated matches, the undated replays are kept.
  */
-export function buildSortedQuery(
+export async function resolveSelection(
   params: ReplaySearchParams
-): { query: Record<string, any>; sortObj: Record<string, 1 | -1> } {
+): Promise<{ query: Record<string, any>; sortObj: Record<string, 1 | -1> }> {
   const sortObj = parseSort(params.sort);
-  let query = buildReplaySearchQuery(params);
-  if (sortObj.startAt === 1) {
-    query = { $and: [query, { startAt: { $ne: null } }] };
-  }
-  return { query, sortObj };
+  const query = buildReplaySearchQuery(params);
+  if (sortObj.startAt !== 1) return { query, sortObj };
+  const dated = { $and: [query, { startAt: { $ne: null } }] };
+  const anyDated = await Replay.findOne(dated).select("_id").maxTimeMS(10000).lean();
+  return { query: anyDated ? dated : query, sortObj };
 }
+
+const MAX_PLAYERS = 4;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function splitParam(v: string | undefined, max = 20): string[] {
-  return v ? v.split(",").filter(Boolean).slice(0, max) : [];
+export const MAX_LIST_VALUES = 20;
+
+function splitParam(v: string | undefined, max = MAX_LIST_VALUES): string[] {
+  return v ? v.split(",").map((s) => s.trim()).filter(Boolean).slice(0, max) : [];
 }
 
 function buildPlayerMatch(
@@ -147,10 +156,19 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
   const hasP1 = Object.keys(p1Match).length > 0;
   const hasP2 = Object.keys(p2Match).length > 0;
   if (hasP1 && hasP2) {
-    query.$or = [
-      { ...prefixMatch(p1Match, "players.0"), ...prefixMatch(p2Match, "players.1") },
-      { ...prefixMatch(p1Match, "players.1"), ...prefixMatch(p2Match, "players.0") },
-    ];
+    // Each side must match a different player, in any of the (up to four) slots.
+    // The $all pre-filter can use the players.* indexes; the slot pairs then rule
+    // out one player satisfying both sides (e.g. a lone Fox in a Fox-vs-Fox search).
+    const slotPairs: Record<string, any>[] = [];
+    for (let i = 0; i < MAX_PLAYERS; i++) {
+      for (let j = 0; j < MAX_PLAYERS; j++) {
+        if (i !== j) {
+          slotPairs.push({ ...prefixMatch(p1Match, `players.${i}`), ...prefixMatch(p2Match, `players.${j}`) });
+        }
+      }
+    }
+    query.players = { $all: [{ $elemMatch: p1Match }, { $elemMatch: p2Match }] };
+    query.$or = slotPairs;
   } else if (hasP1) {
     query.players = { $elemMatch: p1Match };
   } else if (hasP2) {
@@ -183,7 +201,14 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
     }
     if (params.endDate) {
       const d = new Date(params.endDate);
-      if (!isNaN(d.getTime())) query.startAt.$lte = d;
+      if (!isNaN(d.getTime())) {
+        // A plain date is a whole (UTC) day: "through 2024-01-15" includes that day.
+        if (DATE_ONLY_RE.test(params.endDate)) {
+          query.startAt.$lt = new Date(d.getTime() + DAY_MS);
+        } else {
+          query.startAt.$lte = d;
+        }
+      }
     }
     if (Object.keys(query.startAt).length === 0) delete query.startAt;
   }

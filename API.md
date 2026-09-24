@@ -4,12 +4,13 @@ REST API for the Lunar Melee Slippi replay archive. Provides access to hundreds 
 
 **Base URL:** `https://api.lunarmelee.com`
 
-All responses are JSON. Errors return `{ "error": "message" }`.
+All responses are JSON. Errors return `{ "error": "message" }`; errors with a machine-readable [error code](#errors) return `{ "error", "code", ...extra }`.
 
 ---
 
 ## Table of Contents
 
+- [Errors](#errors)
 - [Authentication](#authentication)
 - [Replays](#replays)
 - [Estimates](#estimates)
@@ -25,6 +26,29 @@ All responses are JSON. Errors return `{ "error": "message" }`.
 
 ---
 
+## Errors
+
+Job and estimate errors, and every rate-limit response, carry a `code` (canonical list: `src/utils/apiErrors.ts`). `error` is a plain-English fallback; clients should branch on `code`, not on message text. Other errors (e.g. replay/player `400`/`404`, invalid IDs, `500`) return `{ "error" }` only.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `filter_required` | 400 | Estimate or job without any filter or limit. |
+| `no_matches` | 400 | The filter matches no replays. |
+| `invalid_client` | 400 | Missing or malformed `X-Client-Id`. |
+| `cannot_cancel` | 400 | The job is no longer active. Extra: `status`. |
+| `not_ready` | 400 | The bundle is not built yet. |
+| `forbidden` | 403 | The job belongs to another client. |
+| `not_found` | 404 | No such job. |
+| `bundle_missing` | 410 | The job completed but its bundle is gone from storage. |
+| `rate_limited` | 429 | A request rate limit was hit (every [rate limiter](#rate-limits)). |
+| `too_many_active_jobs` | 429 | The client has the maximum number of active jobs. Extra: `limit`. |
+| `queue_full` | 429 | The global pending queue is full. |
+| `fulldb_rate_limited` | 429 | Full-database download limit. Extra: `retryAfterSeconds`, plus a `Retry-After` header. |
+| `download_cap` | 503 | Storage provider's daily download cap is exhausted. |
+| `storage_busy` | 503 | Storage provider is throttling or briefly unavailable. |
+
+---
+
 ## Authentication
 
 ### Client Identity
@@ -33,9 +57,20 @@ Most endpoints are public. For job management (creating, listing, and cancelling
 
 | Header | Description |
 |---|---|
-| `X-Client-Id` | A UUID generated and persisted in the frontend's `localStorage`. Not a login — just a stable anonymous identifier so users can track their own jobs. |
+| `X-Client-Id` | A UUID identifying the visitor. The website derives it server-side (`getClientId` in `apps/website/src/utils/downloadActions/shared.ts`): a UUID from a hash of the signed-in email, or of `anon:` + the visitor's IP. Not a login — just a stable identifier so users can track their own jobs. If present it must be a UUID (`400 invalid_client` otherwise). |
 
 Endpoints that require `X-Client-Id` are marked below.
+
+### Service Key
+
+The website calls this API on behalf of visitors. With `LUNAR_SERVICE_KEY` set on both sides, it sends:
+
+| Header | Description |
+|---|---|
+| `X-Lunar-Service-Key` | The shared key. Marks the request as a trusted website call. |
+| `X-Visitor-Ip` | The visitor's IP, so rate limits apply per visitor rather than to the website's address. Trusted only with a valid key. |
+
+Once a key is configured, `X-Client-Id` and `X-Visitor-Ip` from any caller without the key are dropped, so job ownership cannot be claimed by calling the API directly. With no key configured, headers are accepted as sent.
 
 ---
 
@@ -59,14 +94,20 @@ Search and filter the replay archive with pagination. Automatically excludes jun
 | `p2ConnectCode` | string | Player 2 connect code. Same format as p1. |
 | `p2CharacterId` | number | Player 2 character ID. Same format as p1. |
 | `p2DisplayName` | string | Player 2 display name. Same format as p1. |
+| `p1Rank` / `p2Rank` | string | Rank tier(s): `platinum`, `diamond`, `master`. Comma-separated. Ranked replays only (their display name is the tier); takes precedence over that side's display name. |
 | `stageId` | number | Stage ID. Comma-separated for multiple. See [Reference Data](#get-stages). |
+| `source` | string | Replay source(s): `netplay`, `ranked`, `tournament`. Comma-separated; unknown values ignored. |
 | `startDate` | string | ISO 8601 date. Only replays on or after this date. |
-| `endDate` | string | ISO 8601 date. Only replays on or before this date. |
+| `endDate` | string | ISO 8601 date. Only replays on or before this date. A date-only value (`2024-01-31`) includes that whole UTC day. |
 | `sort` | string | Sort field and direction as `field:direction`. Allowed fields: `startAt`, `indexedAt`, `duration`. Direction: `1` (ascending) or `-1` (descending). Default: `startAt:-1`. |
 | `page` | number | Page number (1-indexed). Default: `1`. |
-| `limit` | number | Results per page. Default: `50`, max: `200`. |
+| `limit` | number | Results per page. Default: `50`, max: `1000`. |
 
-When both `p1` and `p2` filters are provided, they must match *different* players in the game (useful for searching head-to-head matchups).
+List values are comma-joined and trimmed, with at most 20 values per field.
+
+When both `p1` and `p2` filters (including ranks) are provided, they must match *different* players, in any of the up to four player slots (useful for searching head-to-head matchups).
+
+Ascending `startAt` sort excludes undated replays, unless no matching replay is dated (e.g. the `ranked` source), in which case the undated replays are returned. [Estimates](#estimates), job creation and the bundle worker use this same selection, so they agree on the replays a search selects.
 
 **Response** `200`
 
@@ -100,7 +141,10 @@ When both `p1` and `p2` filters are provided, they must match *different* player
         }
       ],
       "winner": 0,
-      "folderLabel": "netplay",
+      "folderLabel": "netplay/2024-01",
+      "source": "netplay",
+      "usable": true,
+      "viewCount": 0,
       "indexedAt": "2024-02-10T12:00:00.000Z"
     }
   ],
@@ -144,6 +188,20 @@ Get full details for a single replay. `filePath` is excluded.
 
 ---
 
+### Record Replay View
+
+```
+POST /api/replays/:id/view
+```
+
+Record one in-browser watch by incrementing the replay's `viewCount`. Callers dedupe per session.
+
+**Response** `200` — `{ "viewCount": 12 }` (the new count)
+
+**Response** `404` — `{ "error": "Replay not found" }`
+
+---
+
 ### Download Replay
 
 ```
@@ -181,21 +239,27 @@ Estimate replay count, compressed download size, and processing ETA using the fu
 }
 ```
 
-All fields are optional. Values are comma-separated strings (same format as the search query params).
+All fields are optional. Values are comma-separated strings (same format as the search query params). The body is parsed exactly as [POST /api/jobs](#create-download-job) parses it (`parseFilter` in `src/services/replayFilter.ts`): unknown keys are ignored and list fields are trimmed and capped at 20 values, so an estimate describes the bundle a job would build.
 
 | Field | Type | Description |
 |---|---|---|
 | `p1ConnectCode` | string | Player 1 connect code(s), comma-separated. |
 | `p1CharacterId` | string | Player 1 character ID(s), comma-separated. |
 | `p1DisplayName` | string | Player 1 display name(s), comma-separated (prefix match). |
+| `p1Rank` | string | Player 1 rank tier(s): `platinum`, `diamond`, `master`. Selecting all three is no filter. |
 | `p2ConnectCode` | string | Player 2 connect code(s), comma-separated. |
 | `p2CharacterId` | string | Player 2 character ID(s), comma-separated. |
 | `p2DisplayName` | string | Player 2 display name(s), comma-separated (prefix match). |
+| `p2Rank` | string | Player 2 rank tier(s). Same format as `p1Rank`. |
 | `stageId` | string | Stage ID(s), comma-separated. |
+| `source` | string | Source(s): `netplay`, `ranked`, `tournament`. Selecting all three is no filter. |
 | `startDate` | string | ISO 8601 date. Games on or after. |
-| `endDate` | string | ISO 8601 date. Games on or before. |
+| `endDate` | string | ISO 8601 date. Games on or before (a date-only value includes that whole UTC day). |
+| `sort` | string | Same as the search `sort` param. Decides which replays a `maxFiles`/`maxSizeMb` limit keeps. |
 | `maxFiles` | number | Maximum number of replays to include. Applied before `maxSizeMb`. |
-| `maxSizeMb` | number | Maximum total raw file size in megabytes. Applied after `maxFiles`. |
+| `maxSizeMb` | number | Maximum total raw file size in megabytes, capped at `10000`. Applied after `maxFiles`. |
+
+**Response** `400` — `filter_required` when the body has neither a filter nor a limit.
 
 **Response** `200`
 
@@ -239,7 +303,7 @@ Create a download job. The server will asynchronously compress and upload the ma
 |---|---|---|
 | `X-Client-Id` | Yes | Client identity UUID. Used to associate the job with your session. |
 
-**Request Body** — Same filter fields as [POST /api/replays/estimate](#estimate-download-full-filters). Use the estimate endpoint first to preview counts and sizes.
+**Request Body** — Same fields and parsing as [POST /api/replays/estimate](#estimate-download-full-filters). Use the estimate endpoint first to preview counts and sizes.
 
 ```json
 {
@@ -252,23 +316,9 @@ Create a download job. The server will asynchronously compress and upload the ma
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `p1ConnectCode` | string | Player 1 connect code(s), comma-separated. |
-| `p1CharacterId` | string | Player 1 character ID(s), comma-separated. |
-| `p1DisplayName` | string | Player 1 display name(s), comma-separated (prefix match). |
-| `p2ConnectCode` | string | Player 2 connect code(s), comma-separated. |
-| `p2CharacterId` | string | Player 2 character ID(s), comma-separated. |
-| `p2DisplayName` | string | Player 2 display name(s), comma-separated (prefix match). |
-| `stageId` | string | Stage ID(s), comma-separated. |
-| `startDate` | string | ISO 8601 date. Games on or after. |
-| `endDate` | string | ISO 8601 date. Games on or before. |
-| `maxFiles` | number | Maximum number of replays to include. Applied before `maxSizeMb`. |
-| `maxSizeMb` | number | Maximum total raw file size in megabytes. Applied after `maxFiles`. |
+All fields are optional, but a filter or a limit (`maxFiles`/`maxSizeMb`) is required. The same filter can be passed to both `POST /api/replays/estimate` and `POST /api/jobs`.
 
-All fields are optional, but at least one search filter (not just `maxFiles`/`maxSizeMb`) is required. The same filter can be passed to both `POST /api/replays/estimate` and `POST /api/jobs`.
-
-The server stores `replayCount`, `estimatedSize`, and `estimatedProcessingTime` on the job at creation for queue position and ETA calculations.
+The server stores `replayCount`, `totalMatched` (uncapped match count, when a limit trims a filtered selection), `estimatedSize`, and `estimatedProcessingTime` on the job at creation for queue position and ETA calculations.
 
 **Response** `201`
 
@@ -279,11 +329,11 @@ The server stores `replayCount`, `estimatedSize`, and `estimatedProcessingTime` 
 }
 ```
 
-**Response** `400` — `{ "error": "No replays match this filter" }`
+**Response** `400` — `invalid_client`, `filter_required`, or `no_matches`.
 
-**Response** `429` — `{ "error": "You already have 3 active job(s). Maximum is 3. Wait for one to finish or cancel it." }` — Per-client concurrent job limit reached. Applies to jobs in `pending`, `processing`, `compressing`, `compressed`, or `uploading` status.
+**Response** `429` — `too_many_active_jobs` (with `limit`) — Per-client concurrent job limit reached. Applies to jobs in `pending`, `processing`, `bundling`, `bundled`, or `uploading` status.
 
-**Response** `503` — `{ "error": "Job queue is full (50 pending). Try again later." }` — Global pending queue is at capacity.
+**Response** `429` — `queue_full` — Global pending queue is at capacity.
 
 ---
 
@@ -325,7 +375,8 @@ List download jobs created by the current client, newest first.
       "error": null,
       "downloadReady": true,
       "createdAt": "2024-06-01T12:00:00.000Z",
-      "completedAt": "2024-06-01T12:05:00.000Z"
+      "completedAt": "2024-06-01T12:05:00.000Z",
+      "lastDownloadedAt": null
     }
   ],
   "pagination": {
@@ -341,6 +392,8 @@ List download jobs created by the current client, newest first.
 |---|---|---|
 | `downloadReady` | boolean | `true` when the job is completed and the archive is available for download. |
 
+**Response** `400` — `invalid_client` (missing `X-Client-Id`).
+
 ---
 
 ### Cancel My Job
@@ -349,7 +402,7 @@ List download jobs created by the current client, newest first.
 DELETE /api/jobs/:id
 ```
 
-Cancel one of your own active jobs. Only works on jobs with status `pending`, `processing`, `compressing`, `compressed`, or `uploading`.
+Cancel one of your own active jobs. Only works on jobs with status `pending`, `processing`, `bundling`, `bundled`, or `uploading`. The cancel is a single conditional update, so it cannot overwrite a job a worker finishes at the same moment.
 
 **Headers**
 
@@ -359,11 +412,11 @@ Cancel one of your own active jobs. Only works on jobs with status `pending`, `p
 
 **Response** `200` — `{ "message": "Job cancelled" }`
 
-**Response** `403` — `{ "error": "Not your job" }`
+**Response** `400` — `invalid_client`, or `cannot_cancel` (with the job's current `status`) when the job is no longer active.
 
-**Response** `400` — `{ "error": "Cannot cancel a completed job" }` (or similar for the current status)
+**Response** `403` — `forbidden`
 
-**Response** `404` — `{ "error": "Job not found" }`
+**Response** `404` — `not_found`
 
 ---
 
@@ -373,23 +426,32 @@ Cancel one of your own active jobs. Only works on jobs with status `pending`, `p
 GET /api/jobs/:id
 ```
 
-Check the status and progress of a download job. Poll this endpoint to track the job through its lifecycle. No authentication required — anyone with the job ID can check status.
+Check the status and progress of a download job. Poll this endpoint to track the job through its lifecycle. Requires the owner's `X-Client-Id`.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Client-Id` | Yes | Must match the `createdBy` on the job. |
 
 **Response** `200`
 
-Compressing example:
+Bundling example:
 
 ```json
 {
   "jobId": "6651a...",
-  "status": "compressing",
+  "status": "bundling",
   "replayCount": 342,
+  "totalMatched": 342,
+  "capped": false,
   "estimatedSize": 83886080,
   "bundleSize": null,
   "downloadReady": false,
+  "pinned": false,
   "downloadCount": 0,
   "progress": {
-    "step": "compressing",
+    "step": "bundling",
     "filesProcessed": 150,
     "filesTotal": 342
   },
@@ -437,8 +499,8 @@ Uploading example (with byte-level progress):
 |---|---|
 | `pending` | Job is queued, waiting to be picked up by the compressor. |
 | `processing` | Compressor has claimed the job and is querying replays. |
-| `compressing` | Compressing .slp files with slpz. `progress` is updated during this step. |
-| `compressed` | Compression complete, waiting for the uploader to pick it up. |
+| `bundling` | Compressing .slp files with slpz and zipping them. `progress` is updated during this step. |
+| `bundled` | Bundle built, waiting for the uploader to pick it up. |
 | `uploading` | Uploading compressed archive to CDN. `progress.bytesUploaded` / `progress.bytesTotal` track byte-level upload progress (updated every ~1%). |
 | `completed` | Done. `downloadReady` is `true`. |
 | `failed` | Something went wrong. See `error` field. |
@@ -450,12 +512,15 @@ Uploading example (with byte-level progress):
 |---|---|---|
 | `jobId` | string | Job ID. |
 | `status` | string | Current status (see lifecycle above). |
-| `replayCount` | number | Number of matching replays. |
+| `replayCount` | number | Number of replays in the job (after any limit). |
+| `totalMatched` | number \| null | Replays the filter matched before a limit trimmed it. |
+| `capped` | boolean | `true` when a limit trimmed the selection (`totalMatched > replayCount`). |
 | `estimatedSize` | number \| null | Raw file size in bytes before compression. |
-| `bundleSize` | number \| null | Final compressed archive size in bytes. Set when completed. |
+| `bundleSize` | number \| null | Final compressed archive size in bytes. Set once bundled. |
 | `downloadReady` | boolean | `true` when the job is completed and the archive is available. |
+| `pinned` | boolean | Whether the bundle is permanently retained. |
 | `downloadCount` | number | Number of times this bundle has been downloaded. |
-| `progress` | object \| null | Progress during `compressing` and `uploading` steps, null otherwise. See [Progress Object](#progress-object) below. |
+| `progress` | object \| null | Progress during `bundling` and `uploading` steps, null otherwise. See [Progress Object](#progress-object) below. |
 | `error` | string \| null | Error message if failed. |
 | `queuePosition` | number \| null | 1-based position in queue (1 = next up). `0` = currently processing. `null` for terminal statuses. |
 | `estimatedWaitSec` | number \| null | Estimated seconds until the job starts processing. Includes remaining time of active job. `null` for terminal statuses. |
@@ -463,30 +528,34 @@ Uploading example (with byte-level progress):
 | `startedAt` | string \| null | ISO 8601 timestamp when the worker started processing. `null` while pending. |
 | `createdAt` | string | ISO 8601 timestamp. |
 | `completedAt` | string \| null | ISO 8601 timestamp when the job finished. |
+| `lastDownloadedAt` | string \| null | ISO 8601 timestamp of the latest download. |
+| `expiresAt` | string \| null | When an unpinned completed bundle will be removed from storage (retention runs from the last download, or completion). `null` otherwise. |
 
 #### Progress Object
 
-The `progress` field is non-null during `compressing` and `uploading` steps, null otherwise.
+The `progress` field is non-null during `bundling` and `uploading` steps, null otherwise.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `step` | string | always | `"compressing"` or `"uploading"`. |
-| `filesProcessed` | number | always | Files compressed so far (compressing), or `0` (uploading). |
-| `filesTotal` | number | always | Total files to compress (compressing), or `1` (uploading). |
+| `step` | string | always | `"bundling"` or `"uploading"`. |
+| `filesProcessed` | number | always | Files compressed so far (bundling), or `0` (uploading). |
+| `filesTotal` | number | always | Total files to compress (bundling), or `1` (uploading). |
 | `bytesUploaded` | number | uploading | Bytes uploaded to CDN so far. Updated every ~1% of total. |
 | `bytesTotal` | number | uploading | Total bytes to upload (equals `bundleSize`). |
 
-During `compressing`, use `filesProcessed / filesTotal` for the progress bar. During `uploading`, use `bytesUploaded / bytesTotal`:
+During `bundling`, use `filesProcessed / filesTotal` for the progress bar. During `uploading`, use `bytesUploaded / bytesTotal`:
 
 ```ts
-if (progress.step === "compressing") {
+if (progress.step === "bundling") {
   percent = progress.filesProcessed / progress.filesTotal;
 } else if (progress.step === "uploading") {
   percent = progress.bytesUploaded / progress.bytesTotal;
 }
 ```
 
-**Response** `404` — `{ "error": "Job not found" }`
+**Response** `403` — `forbidden`
+
+**Response** `404` — `not_found`
 
 ---
 
@@ -496,7 +565,13 @@ if (progress.step === "compressing") {
 GET /api/jobs/:id/download
 ```
 
-Returns a public CDN download URL. The download is a `.zip` archive containing `.slpz` compressed replay files. Each download increments the job's `downloadCount`.
+Returns a presigned storage download URL, valid for 1 hour. The download is a `.zip` archive containing `.slpz` compressed replay files and a `lunar-manifest.json` mapping each file to its replay: `{ "version": 1, "replays": [{ "file": "12_Game_….slpz", "replayId": "…", "fileHash": "…" }] }` (see `src/services/bundleManifest.ts`). Entry names are unique per bundle only; `replayId` and `fileHash` identify a replay across bundles. Each download increments the job's `downloadCount`. Requires the owner's `X-Client-Id`, except for pinned bundles, which any visitor may download.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `filename` | string | Optional name for the saved file (sanitized, forced to `.zip`). Default: `lunar-db-<last 8 of job id>`. |
 
 To decompress the replays, extract the zip and run [slpz](https://github.com/Walnut356/slpz) to convert `.slpz` back to `.slp`.
 
@@ -504,13 +579,21 @@ To decompress the replays, extract the zip and run [slpz](https://github.com/Wal
 
 ```json
 {
-  "url": "https://cdn.lunarmelee.com/jobs/6651a....zip"
+  "url": "https://<storage host>/jobs/6651a....zip?<signature>"
 }
 ```
 
-**Response** `400` — `{ "error": "Download not ready" }` — Job hasn't completed or archive is missing.
+**Response** `400` — `not_ready` — Job hasn't completed or archive is missing.
 
-**Response** `404` — `{ "error": "Job not found" }`
+**Response** `403` — `forbidden` — Not the owner, and the bundle is not pinned.
+
+**Response** `404` — `not_found`
+
+**Response** `410` — `bundle_missing` — The bundle is no longer in storage.
+
+**Response** `429` — `fulldb_rate_limited` (with `retryAfterSeconds` and a `Retry-After` header) — Full-database bundles only.
+
+**Response** `503` — `download_cap` or `storage_busy` — Storage cannot serve the download right now.
 
 ---
 
@@ -520,7 +603,7 @@ To decompress the replays, extract the zip and run [slpz](https://github.com/Wal
 GET /api/jobs/bundles
 ```
 
-Public catalog of completed download bundles, sorted by popularity (most downloaded first). Useful for discovering and reusing existing bundles instead of creating duplicate jobs.
+Public catalog of pinned (permanent) download bundles, the ones any visitor may download. The full-database bundle is listed first, then by popularity (most downloaded first). Useful for discovering and reusing existing bundles instead of creating duplicate jobs.
 
 **Query Parameters**
 
@@ -542,7 +625,9 @@ Public catalog of completed download bundles, sorted by popularity (most downloa
       "replayCount": 342,
       "bundleSize": 10836352,
       "downloadCount": 15,
-      "completedAt": "2024-06-01T12:05:00.000Z"
+      "completedAt": "2024-06-01T12:05:00.000Z",
+      "lastDownloadedAt": "2024-06-03T09:00:00.000Z",
+      "fullDb": false
     }
   ],
   "pagination": {
@@ -561,6 +646,7 @@ Public catalog of completed download bundles, sorted by popularity (most downloa
 | `bundleSize` | number | Compressed archive size in bytes. |
 | `downloadCount` | number | Number of times this bundle has been downloaded. |
 | `completedAt` | string | ISO 8601 timestamp when the bundle was created. |
+| `fullDb` | boolean | `true` for the full-database bundle. |
 
 ---
 
@@ -578,8 +664,8 @@ Fast prefix search for player connect codes and display names. Designed for sear
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `q` | string | Yes | Search query (minimum 1 character). |
-| `limit` | number | No | Max results. Default: `10`, max: `25`. |
+| `q` | string | No | Search query (max 100 characters). Empty or missing returns the top players by game count. |
+| `limit` | number | No | Max results. Default: `10`, max: `100`. |
 
 **Response** `200`
 
@@ -594,9 +680,9 @@ Fast prefix search for player connect codes and display names. Designed for sear
 ]
 ```
 
-Results are sorted by game count (most active players first).
+Results are sorted by game count (most active players first). Queries of 4+ characters also match connect codes whose tag is a prefix of the query (e.g. `mango` finds `MANG#0`).
 
-**Response** `400` — Query too short.
+**Response** `400` — `{ "error": "Query too long (max 100 characters)" }`
 
 ---
 
@@ -612,12 +698,12 @@ Search players by connect code or display name. Same as autocomplete but with hi
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `q` | string | Yes | Search query (minimum 2 characters). |
+| `q` | string | Yes | Search query (2–100 characters). |
 | `limit` | number | No | Max results. Default: `20`, max: `50`. |
 
 **Response** `200` — Same format as [Autocomplete](#autocomplete-players).
 
-**Response** `400` — Query too short.
+**Response** `400` — Query shorter than 2 or longer than 100 characters.
 
 ---
 
@@ -642,16 +728,20 @@ Overview statistics for the entire archive.
     "failed": 1
   },
   "dbSizeBytes": 1073741824,
-  "totalFileSizeBytes": 21990232555520
+  "totalFileSizeBytes": 21990232555520,
+  "totalDurationFrames": 3888000000,
+  "replaysWithDuration": 540002
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `replays` | number | Total non-junk replays in the archive. |
-| `jobs` | object | Count of download jobs by status. |
+| `jobs` | object | Count of download jobs keyed by status. Only statuses with at least one job are present. |
 | `dbSizeBytes` | number | MongoDB data size in bytes. |
-| `totalFileSizeBytes` | number | Sum of all replay file sizes in bytes. |
+| `totalFileSizeBytes` | number | Sum of non-junk replay file sizes in bytes. |
+| `totalDurationFrames` | number | Sum of non-junk replay durations in frames (60 fps). |
+| `replaysWithDuration` | number | Non-junk replays with a positive duration. |
 
 ---
 
@@ -708,6 +798,14 @@ GET /health
 { "ok": true }
 ```
 
+```
+GET /healthz
+```
+
+Liveness plus a cached deep health check, for status dashboards.
+
+**Response** `200` — `{ "status": "ok" | "degraded", "detail": "..." }`. `detail` names only failing check keys; the full breakdown is at the admin `GET /api/admin/health`.
+
 ---
 
 ## Data Types
@@ -724,8 +822,11 @@ GET /health
 | `startAt` | string \| null | ISO 8601 game start time. |
 | `duration` | number \| null | Game duration in frames (60 fps). |
 | `players` | Player[] | Array of players in the game. |
-| `winner` | number \| null | `playerIndex` of the winner, or null if inconclusive. |
-| `folderLabel` | string \| null | Source category: `netplay`, `ranked_anonymized`, `tournament`, `uploads`. |
+| `winner` | number \| null | `playerIndex` of the winner, or null if unknown. |
+| `folderLabel` | string \| null | Import path label, e.g. `netplay/...` or `ranked_anonymized/...`. |
+| `source` | string \| null | `netplay`, `ranked` or `tournament`, derived from the top folder of `folderLabel`. |
+| `usable` | boolean \| null | Not junk (has players and a stage or character, and is not zero-length). Searches only return `true`. |
+| `viewCount` | number | Times watched in the in-browser viewer. |
 | `indexedAt` | string | ISO 8601 timestamp when the replay was indexed. |
 
 ### Player (in Replay)
@@ -758,17 +859,38 @@ Job creation is subject to several safety limits to prevent runaway resource con
 |---|---|---|---|
 | Concurrent jobs per client | 3 | `JOB_MAX_CONCURRENT_PER_CLIENT` | Active (non-terminal) jobs per `X-Client-Id`. |
 | Total pending queue | 50 | `JOB_MAX_PENDING_TOTAL` | Max pending jobs across all clients. |
-| Job timeout | 60 min | `JOB_TIMEOUT_MINUTES` | Jobs exceeding this are marked `failed`. |
+| Job timeout | 480 min | `JOB_TIMEOUT_MINUTES` | Jobs exceeding this are marked `failed`. |
 | slpz process timeout | 30 min | `SLPZ_TIMEOUT_MINUTES` | Compression subprocess timeout. |
 | Min free disk | 2,048 MB | `MIN_FREE_DISK_MB` | Jobs won't start if temp disk is below this threshold. |
+| Max bundle size | 10,000 MB | — | Upper bound on a job's `maxSizeMb`. |
+| Full-database downloads | 2 per 24 h | `FULLDB_MAX_PER_WINDOW`, `FULLDB_WINDOW_HOURS` | Download URLs issued per client (or per IP without `X-Client-Id`) for the full-database bundle. |
+| Bundle retention | 3 days | `STORAGE_CLEANUP_AFTER_DAYS` | Unpinned bundles are removed this long after their last download (or completion). |
 
 ---
 
 ## Rate Limits
 
+Limits are counted per visitor: the forwarded `X-Visitor-Ip` for trusted website calls (see [Service Key](#service-key)), otherwise `CF-Connecting-IP`, then the socket address. Trusted website calls with no visitor IP are not limited. Every limit returns `429` with code `rate_limited`.
+
 | Scope | Limit |
 |---|---|
-| Global | 100 requests per minute per IP |
+| Global (all routes) | 100 requests per minute |
+| `GET /api/replays` | 30 per minute |
+| `POST /api/replays/estimate` | 15 per minute |
+| `GET /api/replays/:id` | 60 per minute |
+| `POST /api/replays/:id/view` | 60 per minute |
+| `GET /api/replays/:id/download` | 10 per minute |
+| `POST /api/jobs` | 5 per hour |
+| `GET /api/jobs` | 30 per minute |
+| `GET /api/jobs/:id` | 60 per minute |
+| `DELETE /api/jobs/:id` | 10 per minute |
+| `GET /api/jobs/:id/download` | 20 per minute |
+| `GET /api/jobs/bundles` | 30 per minute |
+| `GET /api/players/autocomplete`, `/search` | 30 per minute (shared) |
+| `GET /health`, `/healthz` | 60 per minute (shared) |
+| `POST /api/admin/login` | 30 per 15 minutes |
+| Admin mutations | 30 per minute |
+| Admin analytics and queue | 15 per minute |
 
 Rate limit headers (`RateLimit-Policy`, `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`) are included in responses.
 

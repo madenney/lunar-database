@@ -2,8 +2,8 @@ import fs from "fs";
 import path from "path";
 import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery, buildSortedQuery } from "../services/replaySearchQuery";
-import { createBundle, cleanupJobTemp } from "../services/bundler";
+import { resolveSelection } from "../services/replaySearchQuery";
+import { createBundle, cleanupJobTemp, BundleEntry } from "../services/bundler";
 import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
@@ -23,7 +23,7 @@ export function getCompressorJobId(): string | null {
 export async function processNextCompression(): Promise<boolean> {
   const job = await Job.findOneAndUpdate(
     { status: "pending" },
-    { status: "processing", startedAt: new Date() },
+    { $set: { status: "processing", startedAt: new Date(), phaseStartedAt: new Date() } },
     { sort: { priority: 1, createdAt: 1 }, new: true }
   );
 
@@ -55,35 +55,27 @@ export async function processNextCompression(): Promise<boolean> {
     const maxBytes = job.filter.maxSizeMb != null && job.filter.maxSizeMb > 0 ? Number(job.filter.maxSizeMb) * 1024 * 1024 : Infinity;
     const ordered = maxFiles !== Infinity || maxBytes !== Infinity;
 
-    let cursorQuery: Record<string, any>;
-    let sortObj: Record<string, 1 | -1> | null = null;
-    if (ordered) {
-      const built = buildSortedQuery(job.filter);
-      cursorQuery = built.query;
-      sortObj = built.sortObj;
-    } else {
-      cursorQuery = buildReplaySearchQuery(job.filter);
-    }
+    const { query: cursorQuery, sortObj } = await resolveSelection(job.filter);
 
-    let find = Replay.find(cursorQuery).select("filePath fileSize");
-    if (sortObj) find = find.sort(sortObj);
+    let find = Replay.find(cursorQuery).select("filePath fileSize fileHash");
+    if (ordered) find = find.sort(sortObj);
     const cursor = find.lean().cursor();
 
-    const filePaths: string[] = [];
+    const entries: BundleEntry[] = [];
     let rawSize = 0;
     for await (const r of cursor) {
-      if (filePaths.length >= maxFiles) break;
+      if (entries.length >= maxFiles) break;
       const size = (r as any).fileSize ?? 0;
       // Always include at least one file, then stop before exceeding the budget.
-      if (filePaths.length > 0 && rawSize + size > maxBytes) break;
+      if (entries.length > 0 && rawSize + size > maxBytes) break;
       const fp = path.join(resolvedRoot, (r as any).filePath);
       if (!fp.startsWith(resolvedRoot + path.sep)) continue; // guard path traversal
-      filePaths.push(fp);
+      entries.push({ filePath: fp, replayId: String((r as any)._id), fileHash: (r as any).fileHash });
       rawSize += size;
     }
     await cursor.close();
 
-    if (filePaths.length === 0) {
+    if (entries.length === 0) {
       await Job.updateOne(
         { _id: jobId, status: "processing" },
         { status: "failed", error: "No replays matched the filter" }
@@ -110,9 +102,9 @@ export async function processNextCompression(): Promise<boolean> {
       {
         status: "bundling",
         replayIds: [],
-        replayCount: filePaths.length,
+        replayCount: entries.length,
         estimatedSize: rawSize,
-        progress: { step: "bundling", filesProcessed: 0, filesTotal: filePaths.length },
+        progress: { step: "bundling", filesProcessed: 0, filesTotal: entries.length },
       }
     );
     if (started.matchedCount === 0) {
@@ -120,7 +112,7 @@ export async function processNextCompression(): Promise<boolean> {
       return true;
     }
 
-    const { zipPath, size, cacheHits } = await createBundle(filePaths, jobId, (processed, total) => {
+    const { zipPath, size, cacheHits } = await createBundle(entries, jobId, (processed, total) => {
       // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
       Job.updateOne(
         { _id: job._id, status: "bundling" },
@@ -155,8 +147,8 @@ export async function processNextCompression(): Promise<boolean> {
 
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
-      `Job ${jobId} bundled: ${filePaths.length} files ` +
-      `(${cacheHits} from slpz cache, ${filePaths.length - cacheHits} fresh), ` +
+      `Job ${jobId} bundled: ${entries.length} files ` +
+      `(${cacheHits} from slpz cache, ${entries.length - cacheHits} fresh), ` +
       `${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );
   } catch (err) {

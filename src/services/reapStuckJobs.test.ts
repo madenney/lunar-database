@@ -5,7 +5,7 @@ jest.mock("./bundler", () => ({ cleanupJobTemp: jest.fn() }));
 import { reapStuckJobs } from "./reapStuckJobs";
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test-reaper");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-reaper`);
 });
 afterAll(async () => {
   await mongoose.connection.db!.dropDatabase();
@@ -34,6 +34,27 @@ describe("reapStuckJobs (M5)", () => {
     expect(after!.status).toBe("failed");
     expect(after!.error).toMatch(/reaped/i);
     expect(after!.progress).toBeNull();
+  });
+
+  it("times an upload from its own claim, not from when compression started", async () => {
+    const job = await Job.create({
+      filter: {}, status: "uploading", createdBy: "c",
+      startedAt: new Date(Date.now() - 600 * 60_000), // compression began 10h ago
+      phaseStartedAt: new Date(Date.now() - 10 * 60_000), // upload claimed 10 min ago
+    });
+    const { reaped } = await reapStuckJobs(60);
+    expect(reaped).toBe(0);
+    expect((await Job.findById(job._id).lean())!.status).toBe("uploading");
+  });
+
+  it("reaps a phase that has itself run too long", async () => {
+    const job = await Job.create({
+      filter: {}, status: "uploading", createdBy: "c",
+      startedAt: new Date(Date.now() - 600 * 60_000),
+      phaseStartedAt: new Date(Date.now() - 120 * 60_000),
+    });
+    expect((await reapStuckJobs(60)).reaped).toBe(1);
+    expect((await Job.findById(job._id).lean())!.status).toBe("failed");
   });
 
   it("leaves a recently-started active job alone", async () => {

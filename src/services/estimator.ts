@@ -1,5 +1,5 @@
 import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery, buildSortedQuery, ReplaySearchParams } from "./replaySearchQuery";
+import { resolveSelection, ReplaySearchParams } from "./replaySearchQuery";
 import { config } from "../config";
 
 /**
@@ -29,7 +29,7 @@ export async function queryCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
 ): Promise<{ count: number; rawSize: number; totalDurationFrames: number }> {
-  const query = buildReplaySearchQuery(filter);
+  const { query, sortObj } = await resolveSelection(filter);
   const maxFiles = filter.maxFiles != null && Number(filter.maxFiles) > 0 ? Number(filter.maxFiles) : undefined;
   const maxSizeMb = filter.maxSizeMb != null && Number(filter.maxSizeMb) > 0 ? Number(filter.maxSizeMb) : undefined;
   const wantDuration = !!options?.includeDuration;
@@ -39,13 +39,12 @@ export async function queryCountAndSize(
   // 10 GB upstream, so this only ever reads a few thousand docs — bounded memory,
   // no full-collection load.
   if (maxSizeMb != null) {
-    const { query: sortedQuery, sortObj } = buildSortedQuery(filter);
     const maxBytes = maxSizeMb * 1024 * 1024;
     const fileCap = maxFiles ?? Infinity;
     let count = 0;
     let rawSize = 0;
     let totalDurationFrames = 0;
-    const cursor = Replay.find(sortedQuery)
+    const cursor = Replay.find(query)
       .select(wantDuration ? "fileSize duration" : "fileSize")
       .sort(sortObj)
       .maxTimeMS(15000)

@@ -43,6 +43,13 @@ jest.mock("child_process", () => ({
       // Match on the .zip arg so this is robust to flag order.
       const zipPath = args.find((a) => a.endsWith(".zip"));
       if (zipPath) fs.writeFileSync(zipPath, "zip-mock");
+      // Record what would be zipped so tests can inspect the bundle contents.
+      const cwd = rest.length > 1 ? rest[0]?.cwd : undefined;
+      if (cwd) {
+        (global as any).lastZipContents = Object.fromEntries(
+          fs.readdirSync(cwd).map((f: string) => [f, fs.readFileSync(path.join(cwd, f), "utf8")]),
+        );
+      }
       callback(null, { stdout: "", stderr: "" });
     } else if (cmd === "df") {
       // Return plenty of free space (10GB)
@@ -92,6 +99,22 @@ describe("bundler", () => {
       expect(lastCall[1]).toBe(1); // 1 file total
 
       cleanupJobTemp("bbbbbbbbbbbbbbbbbbbbbbbb");
+    });
+
+    it("writes a manifest mapping each file to its replay id and hash", async () => {
+      const fixture = path.join(__dirname, "../__fixtures__/test.slp");
+      await createBundle(
+        [{ filePath: fixture, replayId: "65f000000000000000000001", fileHash: "abc123" }],
+        "eeeeeeeeeeeeeeeeeeeeeeee",
+      );
+      const contents = (global as any).lastZipContents as Record<string, string>;
+      const manifest = JSON.parse(contents["lunar-manifest.json"]);
+      expect(manifest).toEqual({
+        version: 1,
+        replays: [{ file: "0_test.slpz", replayId: "65f000000000000000000001", fileHash: "abc123" }],
+      });
+      expect(Object.keys(contents)).toContain("0_test.slpz");
+      cleanupJobTemp("eeeeeeeeeeeeeeeeeeeeeeee");
     });
 
     it("throws when no files exist", async () => {

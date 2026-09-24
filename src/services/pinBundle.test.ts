@@ -11,7 +11,7 @@ jest.mock("./storage", () => ({
 import { pinBundle, unpinBundle } from "./pinBundle";
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test-pin");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-pin`);
 });
 afterAll(async () => {
   await mongoose.connection.db!.dropDatabase();

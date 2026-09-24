@@ -21,7 +21,7 @@ export function getUploaderJobId(): string | null {
 export async function processNextUpload(): Promise<boolean> {
   const job = await Job.findOneAndUpdate(
     { status: "bundled" },
-    { status: "uploading" },
+    { $set: { status: "uploading", phaseStartedAt: new Date() } },
     { sort: { priority: 1, createdAt: 1 }, new: true }
   );
 
@@ -59,7 +59,7 @@ export async function processNextUpload(): Promise<boolean> {
       if (pct >= lastReportedPct + 1) {
         lastReportedPct = pct;
         Job.updateOne(
-          { _id: jobId },
+          { _id: jobId, status: "uploading" },
           { "progress.bytesUploaded": loaded, "progress.bytesTotal": total }
         ).catch(() => {});
       }

@@ -1,14 +1,9 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-export type JobStatus =
-  | "pending"
-  | "processing"
-  | "bundling"
-  | "bundled"
-  | "uploading"
-  | "completed"
-  | "failed"
-  | "cancelled";
+import type { JobStatus } from "./jobStatus";
+
+export { JOB_STATUSES, ACTIVE_JOB_STATUSES } from "./jobStatus";
+export type { JobStatus };
 
 export interface IJobFilter {
   p1ConnectCode?: string;
@@ -66,6 +61,9 @@ export interface IJob extends Document {
   progress: IJobProgress | null;
   error: string | null;
   startedAt: Date | null;
+  /** When the current worker phase (compression or upload) was claimed. The
+   *  reaper times phases from here, so queue time between phases never counts. */
+  phaseStartedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
@@ -134,6 +132,7 @@ const JobSchema = new Schema<IJob>(
     progress: { type: JobProgressSchema, default: null },
     error: { type: String, default: null },
     startedAt: { type: Date, default: null },
+    phaseStartedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
   },
   { timestamps: true }

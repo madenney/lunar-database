@@ -21,7 +21,7 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
       return;
     }
 
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 10));
     const query = (q as string)?.trim() || "";
 
     const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -89,7 +89,7 @@ router.get("/search", playerSearchLimiter, async (req: Request, res: Response) =
       return;
     }
 
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10)));
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10) || 20));
     const escaped = (q as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const prefixRegex = new RegExp(`^${escaped}`, "i");
 

@@ -2,7 +2,9 @@ import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { Replay } from "../models/Replay";
-import { buildReplaySearchQuery, ReplaySearchParams } from "../services/replaySearchQuery";
+import { resolveSelection, ReplaySearchParams } from "../services/replaySearchQuery";
+import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
+import { sendApiError } from "../utils/apiErrors";
 import { config } from "../config";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { SearchEvent } from "../models/SearchEvent";
@@ -28,14 +30,14 @@ const estimateLimiter = createRateLimiter({
 // POST /api/replays/estimate — estimate count, size, and ETA for a filter
 router.post("/estimate", estimateLimiter, async (req: Request, res: Response) => {
   try {
-    const params: ReplaySearchParams = req.body;
+    // Parse exactly as job creation does, so the estimate describes the bundle.
+    const params: ReplaySearchParams = parseFilter(req.body ?? {});
 
-    // Don't count maxFiles/maxSizeMb/sort as filter fields. A limit on its own is
-    // enough: the query is bounded by it, so it's safe (and useful) to estimate.
-    const filterKeys = Object.keys(params).filter((k) => k !== "maxFiles" && k !== "maxSizeMb" && k !== "sort");
-    const hasLimit = params.maxFiles != null || params.maxSizeMb != null;
-    if (filterKeys.length === 0 && !hasLimit) {
-      res.status(400).json({ error: "Add at least one filter or a limit" });
+    // A limit on its own is enough: the query is bounded by it, so it's safe (and
+    // useful) to estimate.
+    const { hasFilter, hasLimit } = hasFilterOrLimit(params);
+    if (!hasFilter && !hasLimit) {
+      sendApiError(res, 400, "filter_required");
       return;
     }
 
@@ -88,33 +90,9 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       source: req.query.source as string | undefined,
     };
 
-    const finalQuery = buildReplaySearchQuery(params);
-
-    // Parse sort param (format: "field:direction", e.g. "startAt:-1")
-    const SORT_ALLOWLIST = ["startAt", "indexedAt", "duration"];
-    let sortObj: Record<string, 1 | -1> = { startAt: -1 };
-    if (sort) {
-      const [field, dir] = (sort as string).split(":");
-      if (SORT_ALLOWLIST.includes(field) && (dir === "1" || dir === "-1")) {
-        sortObj = { [field]: Number(dir) as 1 | -1 };
-      }
-    }
-
-    // Sorting by replay date ascending ("oldest"): Mongo orders null/missing
-    // startAt FIRST, flooding the top with undated replays so the toggle looks
-    // broken. Exclude them so "oldest" shows the genuinely oldest dated games.
-    // (Descending already puts nulls last.)
-    //
-    // But this is a presentation tweak, not a filter — it must never be the reason
-    // a search returns nothing. The whole `ranked` source is undated (metadata was
-    // stripped by the anonymisation), so applying it there hid all 850k results and
-    // "oldest" looked broken in the opposite direction. If the exclusion empties the
-    // result, we drop it and return the undated replays instead: date order is
-    // meaningless for them anyway, and showing them beats a mystifying zero.
-    const excludeUndated = sortObj.startAt === 1;
-    if (excludeUndated) {
-      (finalQuery as any).startAt = { $ne: null };
-    }
+    // Same selection as estimate, job creation and the bundle worker, including
+    // how ascending date order treats undated replays.
+    const { query: finalQuery, sortObj } = await resolveSelection({ ...params, sort: sort as string | undefined });
 
     const rawPage = parseInt(page as string, 10);
     const rawLimit = parseInt(limit as string, 10);
@@ -124,19 +102,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const limitNum = Number.isFinite(rawLimit) ? Math.min(1000, Math.max(1, rawLimit)) : 50;
     const skip = (pageNum - 1) * limitNum;
 
-    const runQuery = () =>
-      Promise.all([
-        Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
-        Replay.countDocuments(finalQuery).maxTimeMS(10000),
-      ]);
-
-    let [replays, total] = await runQuery();
-    if (excludeUndated && total === 0) {
-      // Nothing in this selection has a date — the exclusion above is what emptied
-      // it. Retry without. Costs an extra pass only in the case that was broken.
-      delete (finalQuery as any).startAt;
-      [replays, total] = await runQuery();
-    }
+    const [replays, total] = await Promise.all([
+      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
+      Replay.countDocuments(finalQuery).maxTimeMS(10000),
+    ]);
 
     const clientId = req.headers["x-client-id"] as string | undefined;
     SearchEvent.create({

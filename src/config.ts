@@ -42,13 +42,17 @@ export const config = {
   // Stuck-job reaper (M5). A live worker whose current job wedges won't hit the
   // in-process timeout (that only fires between operations), so a periodic reaper,
   // independent of the worker loop, fails jobs stuck in an active state too long.
-  // jobStuckAfterMinutes must be >= 2x jobTimeoutMinutes — a healthy job can spend
-  // up to the per-phase timeout in BOTH compression and upload — so we never reap
-  // a genuinely-running job. Crash-orphaned jobs are handled separately by
+  // It times each phase (compression, upload) separately, so jobStuckAfterMinutes
+  // must be >= jobTimeoutMinutes; the 2x default leaves room for operations that
+  // overrun the in-process timeout check. Crash-orphaned jobs are handled separately by
   // recoverStaleJobs() at startup.
   jobReaperIntervalMinutes: parseInt(process.env.JOB_REAPER_INTERVAL_MINUTES || "15", 10),
   jobStuckAfterMinutes: parseInt(process.env.JOB_STUCK_AFTER_MINUTES || "960", 10),
   slpzBinary: process.env.SLPZ_BINARY || "/usr/local/bin/slpz",
+  /** Shared secret identifying the website (see middleware/serviceCaller.ts).
+   *  Empty = no website trust: rate limits key on the connecting IP and any
+   *  caller's X-Client-Id is accepted, as before. */
+  serviceKey: process.env.LUNAR_SERVICE_KEY || "",
   slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
 

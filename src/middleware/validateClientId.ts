@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { sendApiError } from "../utils/apiErrors";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -11,7 +12,7 @@ export function validateClientId(req: Request, res: Response, next: NextFunction
   const raw = req.headers["x-client-id"];
   if (raw !== undefined) {
     if (typeof raw !== "string" || !UUID_RE.test(raw)) {
-      res.status(400).json({ error: "Invalid X-Client-Id format (must be UUID)" });
+      sendApiError(res, 400, "invalid_client", { error: "Invalid X-Client-Id format (must be UUID)" });
       return;
     }
   }

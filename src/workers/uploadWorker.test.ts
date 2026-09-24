@@ -18,7 +18,7 @@ jest.mock("./utils", () => ({ isCancelled: jest.fn().mockResolvedValue(false) })
 import { processNextUpload } from "./uploadWorker";
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test-workers");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-workers`);
 });
 afterAll(async () => {
   await mongoose.connection.db!.dropDatabase();

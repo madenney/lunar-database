@@ -160,17 +160,19 @@ export async function headObject(key: string): Promise<{ size: number }> {
 
 /**
  * Classify an S3/B2 error (from a HEAD/GET) for client-facing handling.
- *   "cap"      = B2 daily download/bandwidth cap exhausted (503) or throttling
+ *   "cap"      = B2 daily download/transaction cap exhausted (403/429 "cap exceeded");
+ *                lasts until the cap resets
+ *   "busy"     = throttling or brief unavailability (503 / SlowDown); retry soon
  *   "notfound" = object missing
  *   "other"    = anything else (treat as a 5xx)
  */
-export function classifyStorageError(err: unknown): "notfound" | "cap" | "other" {
+export function classifyStorageError(err: unknown): "notfound" | "cap" | "busy" | "other" {
   const e = err as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
   const status = e?.$metadata?.httpStatusCode;
   const name = e?.name ?? "";
   if (status === 404 || name === "NotFound" || name === "NoSuchKey") return "notfound";
-  if (status === 503 || /SlowDown|ServiceUnavailable|TooManyRequests/i.test(name)) return "cap";
-  if ((status === 403 || status === 429) && /cap|exceeded/i.test(e?.message ?? "")) return "cap";
+  if ((status === 403 || status === 429) && /cap|exceeded/i.test(`${name} ${e?.message ?? ""}`)) return "cap";
+  if (status === 503 || /SlowDown|ServiceUnavailable|TooManyRequests/i.test(name)) return "busy";
   return "other";
 }
 

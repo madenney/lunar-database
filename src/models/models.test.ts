@@ -5,7 +5,7 @@ import { Submission } from "./Submission";
 import { Upload } from "./Upload";
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test`);
   // Ensure indexes are built so unique constraints work in tests
   await Replay.syncIndexes();
   await Job.syncIndexes();

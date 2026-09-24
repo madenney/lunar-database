@@ -26,7 +26,7 @@ Internal admin endpoints for managing the Lunar Melee replay archive. These are 
 POST /api/admin/login
 ```
 
-Authenticate and receive a JWT token. Rate limited to 5 attempts per 15 minutes.
+Authenticate and receive a JWT token. Rate limited to 30 attempts per 15 minutes.
 
 **Request Body**
 
@@ -96,11 +96,16 @@ Overview of worker state, replay count, job breakdown, disk usage, and active re
     "running": true,
     "currentJobId": null
   },
+  "cleanup": {
+    "running": true,
+    "maxAgeDays": 3,
+    "intervalMinutes": 60
+  },
   "replays": 542110,
   "jobs": {
     "pending": 2,
     "processing": 1,
-    "compressed": 1,
+    "bundled": 1,
     "completed": 47,
     "failed": 1,
     "cancelled": 3
@@ -115,7 +120,7 @@ Overview of worker state, replay count, job breakdown, disk usage, and active re
   "limits": {
     "jobMaxConcurrentPerClient": 3,
     "jobMaxPendingTotal": 50,
-    "jobTimeoutMinutes": 60,
+    "jobTimeoutMinutes": 480,
     "slpzTimeoutMinutes": 30,
     "minFreeDiskMb": 2048
   },
@@ -130,8 +135,9 @@ Overview of worker state, replay count, job breakdown, disk usage, and active re
 | `compressor.currentJobId` | string \| null | Job ID currently being compressed, or null. |
 | `uploader.running` | boolean | Whether the uploader worker is active. |
 | `uploader.currentJobId` | string \| null | Job ID currently being uploaded, or null. |
+| `cleanup` | object | Storage cleanup worker state, bundle retention (`maxAgeDays`) and interval. |
 | `replays` | number | Total replay count (all replays, not filtered). |
-| `jobs` | object | Job counts keyed by status. |
+| `jobs` | object | Job counts keyed by status (only statuses with at least one job). |
 | `tempDisk.usedBytes` | number | Bytes used in job temp directory. |
 | `tempDisk.usedMb` | number | MB used (rounded). |
 | `tempDisk.freeBytes` | number | Bytes free on the temp partition. |
@@ -147,10 +153,10 @@ Overview of worker state, replay count, job breakdown, disk usage, and active re
 
 Job processing is split into two independent workers:
 
-- **Compressor** — picks up `pending` jobs, queries replays, compresses into a `.zip` bundle (slpz + zip store mode), and sets status to `compressed`.
-- **Uploader** — picks up `compressed` jobs, uploads the bundle to B2 storage, and sets status to `completed`.
+- **Compressor** — picks up `pending` jobs, queries replays, compresses into a `.zip` bundle (slpz + zip store mode), and sets status to `bundled`.
+- **Uploader** — picks up `bundled` jobs, uploads the bundle to B2 storage, and sets status to `completed`.
 
-**Job lifecycle:** `pending → processing → compressing → compressed → uploading → completed`
+**Job lifecycle:** `pending → processing → bundling → bundled → uploading → completed`. Any active status can end in `failed` or `cancelled`.
 
 ### Compressor Control
 
@@ -188,6 +194,17 @@ POST /api/admin/worker/uploader/stop
 
 **Response** `200` — `{ "message": "Uploader stopped" }` or `{ "message": "Uploader already stopped" }`
 
+### Cleanup Worker Control
+
+```
+POST /api/admin/worker/cleanup/start
+POST /api/admin/worker/cleanup/stop
+```
+
+Start or stop the storage cleanup worker, which removes expired unpinned bundles.
+
+**Response** `200` — `{ "message": "Cleanup worker started" }` / `"stopped"`, or `"... already running"` / `"... already stopped"`.
+
 ### Worker Status
 
 ```
@@ -205,6 +222,11 @@ GET /api/admin/worker/status
   "uploader": {
     "running": true,
     "currentJobId": null
+  },
+  "cleanup": {
+    "running": true,
+    "maxAgeDays": 3,
+    "intervalMinutes": 60
   }
 }
 ```
@@ -221,20 +243,23 @@ Admin job management has full access to all jobs regardless of `createdBy`.
 GET /api/admin/jobs/queue
 ```
 
-View the current job processing queue — the active job (if any) and all pending jobs in processing order.
+View the current job processing queue — the active jobs and all pending jobs in processing order. The compressor and uploader run concurrently, and `bundled` jobs wait between them, so several jobs can be active at once.
 
 **Response** `200`
 
 ```json
 {
-  "activeJob": {
-    "_id": "6651a...",
-    "status": "compressing",
-    "filter": { "p1ConnectCode": "AKLO#0" },
-    "priority": 0,
-    "replayCount": 342,
-    "progress": { "step": "compressing", "filesProcessed": 150, "filesTotal": 342, "bytesUploaded": null, "bytesTotal": null }
-  },
+  "activeJobs": [
+    {
+      "_id": "6651a...",
+      "status": "bundling",
+      "filter": { "p1ConnectCode": "AKLO#0" },
+      "priority": 0,
+      "replayCount": 342,
+      "progress": { "step": "bundling", "filesProcessed": 150, "filesTotal": 342 }
+    }
+  ],
+  "activeJob": { "_id": "6651a...", "status": "bundling", "...": "first of activeJobs" },
   "queue": [
     {
       "_id": "6651b...",
@@ -248,7 +273,7 @@ View the current job processing queue — the active job (if any) and all pendin
 }
 ```
 
-Queue is sorted by `priority` ascending (lower = first), then `createdAt` ascending.
+`activeJobs` holds jobs in `processing`, `bundling`, `bundled` or `uploading`, oldest start first. `activeJob` is the first of them (or `null`), kept for compatibility. `queue` holds `pending` jobs sorted by `priority` ascending (lower = first), then `createdAt` ascending.
 
 ---
 
@@ -288,8 +313,9 @@ GET /api/admin/jobs
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `status` | string | — | Filter by job status (`pending`, `processing`, `compressing`, `compressed`, `uploading`, `completed`, `failed`, `cancelled`). |
+| `status` | string | — | Filter by job status (`pending`, `processing`, `bundling`, `bundled`, `uploading`, `completed`, `failed`, `cancelled`). |
 | `createdBy` | string | — | Filter by client ID. |
+| `anonymous` | string | — | `1` or `true`: only jobs with no client ID (overrides `createdBy`). |
 | `startDate` | string | — | ISO 8601 date. Jobs created on or after. |
 | `endDate` | string | — | ISO 8601 date. Jobs created on or before. |
 | `page` | number | `1` | Page number. |
@@ -308,7 +334,6 @@ GET /api/admin/jobs
         "p1CharacterId": "20"
       },
       "createdBy": "uuid-string",
-      "replayIds": ["...", "..."],
       "replayCount": 342,
       "estimatedSize": 83886080,
       "bundlePath": "/tmp/jobs/6651a.zip",
@@ -332,7 +357,7 @@ GET /api/admin/jobs
 }
 ```
 
-Note: Admin list returns the full job document including `r2Key`, `bundlePath`, `replayIds`, `createdBy`, and `pinned` (whether the bundle is permanently retained — see [Pin Bundle](#pin-bundle)). When filtering by `status=pending`, results are sorted by `{ priority: 1, createdAt: 1 }` (queue order) instead of newest-first.
+Note: Admin list returns the full job document except `replayIds`, including `r2Key`, `bundlePath`, `createdBy`, and `pinned` (whether the bundle is permanently retained — see [Pin Bundle](#pin-bundle)). When filtering by `status=pending`, results are sorted by `{ priority: 1, createdAt: 1 }` (queue order) instead of newest-first.
 
 ---
 
@@ -342,9 +367,9 @@ Note: Admin list returns the full job document including `r2Key`, `bundlePath`, 
 GET /api/admin/jobs/:id
 ```
 
-Returns the full job document (all fields).
+Returns the full job document (all fields, including `replayIds`).
 
-**Response** `200` — Full job document (same shape as list items above).
+**Response** `200` — Full job document (same shape as list items above, plus `replayIds`).
 
 **Response** `404` — `{ "error": "Job not found" }`
 
@@ -374,14 +399,14 @@ Edit a job's filter (only if `pending`) or change its status.
 | Field | Type | Description |
 |---|---|---|
 | `filter` | object | New filter. Only allowed when job status is `pending`. |
-| `status` | string | Set status to any valid value: `pending`, `processing`, `compressing`, `compressed`, `uploading`, `completed`, `failed`, `cancelled`. |
+| `status` | string | New status. Only these transitions are allowed: `pending` → `cancelled`; `processing`/`bundling`/`bundled`/`uploading` → `cancelled` or `failed`; `failed`/`cancelled` → `pending`. |
 | `priority` | integer | Queue priority. Lower values are processed first. Default is `0`. Only allowed when job status is `pending`. |
 
 All fields are optional.
 
 **Response** `200` — Updated job document.
 
-**Response** `400` — `{ "error": "Can only edit filter on pending jobs" }` or `{ "error": "Invalid status..." }`
+**Response** `400` — `{ "error": "Can only edit filter on pending jobs" }`, `{ "error": "Can only change priority on pending jobs" }`, `{ "error": "Invalid status..." }` or `{ "error": "Cannot transition from ..." }`
 
 **Response** `404` — `{ "error": "Job not found" }`
 
@@ -393,11 +418,13 @@ All fields are optional.
 DELETE /api/admin/jobs/:id
 ```
 
-Cancel a job and clean up all associated resources (R2 object + local temp files).
+Cancel a job and clean up all associated resources (R2 object + local temp files). With `?purge=true`, the job document is deleted as well.
 
-**Response** `200` — `{ "message": "Job cancelled and cleaned up" }`
+**Response** `200` — `{ "message": "Job cancelled and cleaned up" }` (or `{ "message": "Job deleted" }` with `purge`)
 
 **Response** `404` — `{ "error": "Job not found" }`
+
+**Response** `409` — `{ "error": "Unpin this bundle before deleting it", "code": "pinned" }` — Pinned bundles must be [unpinned](#unpin-bundle) first.
 
 ---
 
@@ -724,7 +751,7 @@ Reject a pending submission and delete the file from the airlock.
 
 Endpoints for querying search and download event data. All analytics endpoints require admin auth.
 
-No IP addresses or user agents are stored — only `clientId` (anonymous UUID from `X-Client-Id` header).
+No IP addresses or user agents are stored — only `clientId` (the `X-Client-Id` UUID, which the website derives from a hash of the signed-in email or of the visitor's IP).
 
 ### Overview
 
@@ -752,7 +779,8 @@ High-level summary of all search and download activity, optionally filtered to a
   },
   "downloads": {
     "job": { "count": 210, "totalBytes": 53687091200, "totalReplays": 42000, "uniqueClients": 55 },
-    "replay": { "count": 85, "totalBytes": 8388608, "totalReplays": 85, "uniqueClients": 30 }
+    "replay": { "count": 85, "totalBytes": 8388608, "totalReplays": 85, "uniqueClients": 30 },
+    "full_db": { "count": 2, "totalBytes": 2800000000000, "totalReplays": 1080000, "uniqueClients": 2 }
   },
   "totalSearchEvents": 2840,
   "totalDownloadEvents": 295,
@@ -764,7 +792,7 @@ High-level summary of all search and download activity, optionally filtered to a
 | Field | Type | Description |
 |---|---|---|
 | `searches` | object | Event counts and unique clients, keyed by type (`search`, `estimate`, `player_search`). |
-| `downloads` | object | Event counts, bytes transferred, replays served, and unique clients, keyed by type (`job`, `replay`). |
+| `downloads` | object | Event counts, bytes transferred, replays served, and unique clients, keyed by type (`job`, `replay`, `full_db`). |
 | `totalSearchEvents` | number | Sum of all search event types. |
 | `totalDownloadEvents` | number | Sum of all download event types. |
 | `uniqueSearchClients` | number | Distinct client IDs across all search types. |
@@ -988,7 +1016,7 @@ Paginated log of individual download events.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `type` | string | — | Filter by download type: `job` or `replay`. |
+| `type` | string | — | Filter by download type: `job`, `replay` or `full_db`. |
 | `clientId` | string | — | Filter by client ID. |
 | `startDate` | string | — | ISO 8601 date. Events on or after. |
 | `endDate` | string | — | ISO 8601 date. Events on or before. |

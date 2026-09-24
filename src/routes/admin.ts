@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { config } from "../config";
 import { Admin } from "../models/Admin";
-import { Job, JobStatus } from "../models/Job";
+import { Job, JobStatus, JOB_STATUSES, ACTIVE_JOB_STATUSES } from "../models/Job";
 import { Replay } from "../models/Replay";
 import { requireAdmin } from "../middleware/auth";
 import { sendError } from "../utils/sendError";
@@ -20,7 +20,7 @@ import { deleteFromStorage } from "../services/storage";
 import { pinBundle, unpinBundle, PinError } from "../services/pinBundle";
 import { cleanupJobTemp, getTempDiskUsage, cleanupOrphanedTemp } from "../services/bundler";
 import { runHealthChecks } from "../services/healthCheck";
-import { parseFilter } from "./jobs";
+import { parseFilter } from "../services/replayFilter";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { createRateLimiter } from "../utils/rateLimiter";
 
@@ -39,9 +39,7 @@ const analyticsLimiter = createRateLimiter({
 // Pre-computed dummy hash for timing-safe login comparison
 const DUMMY_HASH = bcrypt.hashSync("dummy-timing-safe-value", 12);
 
-const VALID_JOB_STATUSES: JobStatus[] = [
-  "pending", "processing", "bundling", "bundled", "uploading", "completed", "failed", "cancelled",
-];
+const VALID_JOB_STATUSES: readonly JobStatus[] = JOB_STATUSES;
 
 const router = Router();
 
@@ -76,7 +74,9 @@ router.post("/login", async (req: Request, res: Response) => {
       { expiresIn: config.jwtExpiresIn, algorithm: "HS256" }
     );
 
-    res.json({ token, username: admin.username });
+    // Seconds until expiry, so the website refreshes before JWT_EXPIRES_IN runs out.
+    const { exp, iat } = jwt.decode(token) as { exp: number; iat: number };
+    res.json({ token, username: admin.username, expiresIn: exp - iat });
   } catch (err) {
     sendError(res, err);
   }
@@ -303,12 +303,16 @@ router.get("/jobs", async (req: Request, res: Response) => {
 // GET /api/admin/jobs/queue — view current queue
 router.get("/jobs/queue", analyticsLimiter, async (_req: Request, res: Response) => {
   try {
-    const [activeJob, queue] = await Promise.all([
-      Job.findOne({ status: { $in: ["processing", "bundling", "uploading"] } }).lean(),
+    // The compressor and uploader run concurrently, and "bundled" jobs wait
+    // between them, so several jobs can be active at once.
+    const [activeJobs, queue] = await Promise.all([
+      Job.find({ status: { $in: ACTIVE_JOB_STATUSES.filter((s) => s !== "pending") } })
+        .sort({ startedAt: 1, createdAt: 1 })
+        .lean(),
       Job.find({ status: "pending" }).sort({ priority: 1, createdAt: 1 }).lean(),
     ]);
 
-    res.json({ activeJob: activeJob || null, queue });
+    res.json({ activeJobs, activeJob: activeJobs[0] ?? null, queue });
   } catch (err) {
     sendError(res, err);
   }
@@ -438,6 +442,13 @@ router.delete("/jobs/:id", adminMutationLimiter, async (req: Request, res: Respo
     const job = await Job.findById(req.params.id);
     if (!job) {
       res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    // Pinned bundles are the permanent archive (including the full-DB zip), so
+    // deleting their object must be a deliberate two-step: unpin, then delete.
+    if (job.pinned) {
+      res.status(409).json({ error: "Unpin this bundle before deleting it", code: "pinned" });
       return;
     }
 

@@ -5,7 +5,7 @@ import { cleanupExpiredJobs } from "./storageCleanup";
 const DAY = 24 * 60 * 60 * 1000;
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test-cleanup");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-cleanup`);
 });
 afterAll(async () => {
   await mongoose.connection.db!.dropDatabase();

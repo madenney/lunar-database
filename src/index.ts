@@ -14,6 +14,7 @@ import { startCleanupWorker, stopCleanupWorker } from "./workers/cleanupWorker";
 import { startReaper, stopReaper } from "./workers/reaperWorker";
 import { startHealthMonitor, stopHealthMonitor } from "./services/healthMonitor";
 import { getCachedHealth } from "./services/healthCheck";
+import { identifyServiceCaller } from "./middleware/serviceCaller";
 import { validateClientId } from "./middleware/validateClientId";
 import { preloadBlacklist } from "./services/tokenBlacklist";
 import replayRoutes from "./routes/replays";
@@ -117,6 +118,10 @@ async function main() {
     ],
   }));
   app.use(express.json({ limit: "100kb" }));
+
+  // Recognise the website (shared service key) before anything reads identity
+  // headers or rate-limits; untrusted callers lose X-Client-Id once a key is set.
+  app.use(identifyServiceCaller);
 
   // Validate X-Client-Id header format globally (prevents NoSQL injection)
   app.use(validateClientId);

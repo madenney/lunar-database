@@ -123,6 +123,7 @@ Returns `{ ok: true }`.
 | `MONGODB_URI` | `mongodb://localhost:27017/lm-database` | MongoDB connection string |
 | `PORT` | `3000` | API server port |
 | `SLP_ROOT_DIR` | `/data/slp` | Root directory of `.slp` files |
+| `LUNAR_SERVICE_KEY` | empty | Shared secret identifying the website (same value in the website's env). When set, only the website may forward `X-Visitor-Ip` (per-visitor rate limits) or send `X-Client-Id`; other callers' identity headers are dropped. Deploy the website with the key before setting it here. |
 
 ## Project Structure
 

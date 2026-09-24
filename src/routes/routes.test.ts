@@ -5,6 +5,7 @@ import { Replay } from "../models/Replay";
 import { Job } from "../models/Job";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { config } from "../config";
+import { resolveSelection } from "../services/replaySearchQuery";
 import replayRoutes from "./replays";
 import jobRoutes from "./jobs";
 import statsRoutes from "./stats";
@@ -16,7 +17,7 @@ let server: http.Server;
 let baseUrl: string;
 
 beforeAll(async () => {
-  await mongoose.connect("mongodb://localhost:27017/lm-database-test-routes");
+  await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-routes`);
 
   app = express();
   app.use(express.json());
@@ -249,6 +250,71 @@ describe("GET /api/replays", () => {
   });
 });
 
+describe("selection consistency", () => {
+  const replay = (i: number, extra: Record<string, any>) =>
+    Replay.create({
+      filePath: `/test/sel${i}.slp`, fileHash: `sel${i}`, fileSize: 1000, stageId: 31,
+      players: [{ playerIndex: 0, connectCode: `S${i}#1`, characterId: 2, characterName: "Fox" }],
+      ...extra,
+    });
+
+  it("keeps undated replays for oldest-first when nothing is dated (ranked)", async () => {
+    for (let i = 0; i < 3; i++) await replay(i, { source: "ranked", startAt: null });
+
+    const list = await get("/api/replays?source=ranked&sort=startAt:1");
+    expect(list.body.pagination.total).toBe(3);
+
+    const estimate = await post("/api/replays/estimate", { source: "ranked", sort: "startAt:1", maxFiles: 2 });
+    expect(estimate.body.replayCount).toBe(2);
+
+    // The bundle worker reads this same selection.
+    const { query } = await resolveSelection({ source: "ranked", sort: "startAt:1" });
+    expect(await Replay.countDocuments(query)).toBe(3);
+  });
+
+  it("excludes undated replays for oldest-first when dated ones exist, everywhere", async () => {
+    await replay(0, { source: "netplay", startAt: new Date("2023-05-01T00:00:00Z") });
+    await replay(1, { source: "netplay", startAt: null });
+    await replay(2, { source: "netplay", startAt: null });
+
+    const list = await get("/api/replays?source=netplay&sort=startAt:1");
+    expect(list.body.pagination.total).toBe(1);
+
+    const estimate = await post("/api/replays/estimate", { source: "netplay", sort: "startAt:1", maxFiles: 5 });
+    expect(estimate.body.replayCount).toBe(1);
+  });
+
+  it("includes the whole end date", async () => {
+    await replay(0, { startAt: new Date("2024-01-15T18:00:00Z") });
+    await replay(1, { startAt: new Date("2024-01-16T00:00:00Z") });
+
+    const { body } = await get("/api/replays?startDate=2024-01-15&endDate=2024-01-15");
+    expect(body.pagination.total).toBe(1);
+  });
+
+  it("does not let one player satisfy both sides of a matchup", async () => {
+    await replay(0, {
+      players: [
+        { playerIndex: 0, connectCode: "A#1", characterId: 2, characterName: "Fox" },
+        { playerIndex: 1, connectCode: "B#1", characterId: 9, characterName: "Marth" },
+      ],
+    });
+    await replay(1, {
+      players: [
+        { playerIndex: 0, connectCode: "C#1", characterId: 9, characterName: "Marth" },
+        { playerIndex: 1, connectCode: "D#1", characterId: 9, characterName: "Marth" },
+        { playerIndex: 2, connectCode: "E#1", characterId: 2, characterName: "Fox" },
+        { playerIndex: 3, connectCode: "F#1", characterId: 2, characterName: "Fox" },
+      ],
+    });
+
+    const foxVsFox = await get("/api/replays?p1CharacterId=2&p2CharacterId=2");
+    expect(foxVsFox.body.pagination.total).toBe(1); // only the doubles game has two Foxes
+    const foxVsMarth = await get("/api/replays?p1CharacterId=2&p2CharacterId=9");
+    expect(foxVsMarth.body.pagination.total).toBe(2); // slots 2/3 count too
+  });
+});
+
 describe("GET /api/replays/:id", () => {
   it("returns a replay by id without filePath", async () => {
     const replay = await Replay.create({ filePath: "/test/x.slp", fileHash: "x" });
@@ -315,12 +381,14 @@ describe("POST /api/jobs", () => {
     const { status, body } = await post("/api/jobs", {}, jobHeaders);
     expect(status).toBe(400);
     expect(body.error).toMatch(/filter/i);
+    expect(body.code).toBe("filter_required");
   });
 
   it("rejects when no replays match", async () => {
     const { status, body } = await post("/api/jobs", { p1ConnectCode: "NOBODY#0" }, jobHeaders);
     expect(status).toBe(400);
     expect(body.error).toMatch(/no replays/i);
+    expect(body.code).toBe("no_matches");
   });
 
   it("stores maxFiles in filter and caps replayCount", async () => {
@@ -383,6 +451,38 @@ describe("DELETE /api/jobs/:id", () => {
 
     const { status } = await del(`/api/jobs/${job._id}`, { "X-Client-Id": "client-1" });
     expect(status).toBe(400);
+  });
+});
+
+describe("DELETE /api/jobs/:id — codes and races", () => {
+  it("cancels an active job", async () => {
+    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "uploading", createdBy: TEST_CLIENT_ID });
+    const { status } = await del(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
+    expect(status).toBe(200);
+    expect((await Job.findById(job._id))!.status).toBe("cancelled");
+  });
+
+  it("never overwrites a job that already completed", async () => {
+    const job = await Job.create({
+      filter: { p1ConnectCode: "X#1" }, status: "completed", r2Key: "jobs/x.zip", createdBy: TEST_CLIENT_ID,
+    });
+    const { status, body } = await del(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
+    expect(status).toBe(400);
+    expect(body.code).toBe("cannot_cancel");
+    const after = await Job.findById(job._id);
+    expect(after!.status).toBe("completed");
+    expect(after!.r2Key).toBe("jobs/x.zip");
+  });
+
+  it("reports another client's job as forbidden and a missing one as not found", async () => {
+    const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, status: "pending", createdBy: "someone-else" });
+    const forbidden = await del(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
+    expect(forbidden.body.code).toBe("forbidden");
+    expect((await Job.findById(job._id))!.status).toBe("pending");
+
+    const missing = await del(`/api/jobs/${new mongoose.Types.ObjectId()}`, { "X-Client-Id": TEST_CLIENT_ID });
+    expect(missing.status).toBe(404);
+    expect(missing.body.code).toBe("not_found");
   });
 });
 
@@ -501,6 +601,7 @@ describe("GET /api/jobs/:id/download", () => {
       headers: { "X-Client-Id": TEST_CLIENT_ID },
     });
     expect(res.status).toBe(400);
+    expect(((await res.json()) as any).code).toBe("not_ready");
   });
 });
 

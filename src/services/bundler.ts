@@ -4,6 +4,7 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { config } from "../config";
+import { BUNDLE_MANIFEST_NAME, BUNDLE_MANIFEST_VERSION, BundleManifest } from "./bundleManifest";
 
 const execFileAsync = promisify(execFile);
 
@@ -29,14 +30,18 @@ async function getFreeDiskBytes(): Promise<number> {
   return parseInt(lines[lines.length - 1].trim(), 10);
 }
 
+/** A replay to bundle. Identity (when known) goes into the bundle manifest. */
+export type BundleEntry = string | { filePath: string; replayId: string; fileHash: string };
+
 /**
  * Creates a compressed bundle:
  * 1. Compress each .slp directly to temp dir using `slpz -x -o <out.slpz> <source.slp>`
  *    (never copies, moves, or modifies original .slp files)
- * 2. Zip the .slpz files in store mode (no compression — slpz already compressed)
+ * 2. Write lunar-manifest.json mapping each .slpz to its replay id and hash
+ * 3. Zip the directory in store mode (no compression — slpz already compressed)
  */
 export async function createBundle(
-  filePaths: string[],
+  entries: BundleEntry[],
   jobId: string,
   onProgress?: BundleProgressCallback
 ): Promise<BundleResult> {
@@ -62,10 +67,13 @@ export async function createBundle(
 
   // Compress each .slp directly to temp dir as .slpz
   // Use index prefix to prevent filename collisions (e.g. two different Game_20240101T000000.slp)
+  const filePaths = entries.map((e) => (typeof e === "string" ? e : e.filePath));
+  const manifest: BundleManifest = { version: BUNDLE_MANIFEST_VERSION, replays: [] };
   let compressed = 0;
   let cacheHits = 0;
   for (let i = 0; i < filePaths.length; i++) {
     const fp = filePaths[i];
+    const entry = entries[i];
     const outName = `${i}_${path.basename(fp, ".slp")}.slpz`;
     const outPath = path.join(jobDir, outName);
 
@@ -98,6 +106,9 @@ export async function createBundle(
         }
       }
       compressed++;
+      if (typeof entry !== "string") {
+        manifest.replays.push({ file: outName, replayId: entry.replayId, fileHash: entry.fileHash });
+      }
       if (onProgress && compressed % 100 === 0) {
         onProgress(compressed, filePaths.length);
       }
@@ -137,10 +148,14 @@ export async function createBundle(
     throw new Error("No files were compressed for bundling");
   }
 
+  if (manifest.replays.length > 0) {
+    await fsp.writeFile(path.join(jobDir, BUNDLE_MANIFEST_NAME), JSON.stringify(manifest));
+  }
+
   // Zip the .slpz files (store mode — no compression, slpz is already compressed).
   // Point zip at the job dir (cwd) with a single "." rather than listing every file
   // on the command line: an 80k-file bundle builds a multi-MB argv that fails with
-  // E2BIG. All .slpz files sit flat in jobDir, so `zip -r .` from that cwd stores
+  // E2BIG. The .slpz files (and lunar-manifest.json) sit flat in jobDir, so `zip -r .` from that cwd stores
   // them by basename — identical output to the old `-j <every file>`. -q suppresses
   // zip's per-file stdout so 80k "adding:" lines can't overflow the exec buffer.
   const zipPath = path.resolve(path.join(config.jobTempDir, `${jobId}.zip`));
