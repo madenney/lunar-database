@@ -8,7 +8,7 @@ import { config } from "../config";
 import { resolveSelection } from "../services/replaySearchQuery";
 import replayRoutes from "./replays";
 import jobRoutes from "./jobs";
-import statsRoutes from "./stats";
+import statsRoutes, { clearStatsCache } from "./stats";
 import referenceRoutes from "./reference";
 import submissionsRoutes from "./submissions";
 
@@ -758,6 +758,8 @@ describe("POST /api/submissions/:id/reject", () => {
 });
 
 describe("GET /api/stats", () => {
+  beforeEach(() => clearStatsCache());
+
   it("returns replay count and job counts", async () => {
     await Replay.create({ filePath: "/test/s.slp", fileHash: "s", stageId: 31, players: [{ playerIndex: 0, connectCode: "S#1", characterId: 2, characterName: "Fox" }] });
     await Job.create({ filter: {} });
@@ -766,6 +768,21 @@ describe("GET /api/stats", () => {
     expect(status).toBe(200);
     expect(body.replays).toBe(1);
     expect(body.jobs).toBeDefined();
+  });
+
+  it("serves replay totals from a short cache but keeps job counts live", async () => {
+    await Replay.create({ filePath: "/test/c1.slp", fileHash: "c1", stageId: 31, players: [{ playerIndex: 0, connectCode: "C#1", characterId: 2, characterName: "Fox" }] });
+    const first = await get("/api/stats");
+    expect(first.body.replays).toBe(1);
+
+    await Replay.create({ filePath: "/test/c2.slp", fileHash: "c2", stageId: 31, players: [{ playerIndex: 0, connectCode: "C#2", characterId: 2, characterName: "Fox" }] });
+    await Job.create({ filter: {}, status: "pending" });
+    const second = await get("/api/stats");
+    expect(second.body.replays).toBe(1); // cached
+    expect(second.body.jobs.pending).toBe(1); // live
+
+    clearStatsCache();
+    expect((await get("/api/stats")).body.replays).toBe(2);
   });
 });
 

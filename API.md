@@ -715,7 +715,8 @@ Search players by connect code or display name. Same as autocomplete but with hi
 GET /api/stats
 ```
 
-Overview statistics for the entire archive.
+Overview statistics for the entire archive. Replay totals are cached for up to a
+minute; job counts are always current.
 
 **Response** `200`
 
@@ -887,6 +888,7 @@ Limits are counted per visitor: the forwarded `X-Visitor-Ip` for trusted website
 | `GET /api/jobs/:id/download` | 20 per minute |
 | `GET /api/jobs/bundles` | 30 per minute |
 | `GET /api/players/autocomplete`, `/search` | 30 per minute (shared) |
+| `GET /api/stats` | 60 per minute |
 | `GET /health`, `/healthz` | 60 per minute (shared) |
 | `POST /api/admin/login` | 30 per 15 minutes |
 | Admin mutations | 30 per minute |
