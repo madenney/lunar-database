@@ -3,6 +3,7 @@ import { Replay } from "./Replay";
 import { Job } from "./Job";
 import { Submission } from "./Submission";
 import { Upload } from "./Upload";
+import { saveBatch } from "../services/crawler";
 
 beforeAll(async () => {
   await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test`);
@@ -23,6 +24,26 @@ afterEach(async () => {
   await Job.deleteMany({});
   await Submission.deleteMany({});
   await Upload.deleteMany({});
+});
+
+describe("Replay insertMany (crawler path)", () => {
+  const doc = (i: number, extra: Record<string, unknown> = {}) => ({
+    filePath: `/bulk/${i}.slp`, fileHash: `bulk${i}`, stageId: 31, duration: 3600,
+    players: [{ playerIndex: 0, connectCode: `B#${i}`, characterId: 2, characterName: "Fox" }],
+    ...extra,
+  });
+
+  it("inserts with the real hook and materialises usable", async () => {
+    await Replay.insertMany([doc(1), doc(2, { duration: 0 })]);
+    const rows = await Replay.find({ filePath: /^\/bulk\// }).sort({ filePath: 1 }).lean();
+    expect(rows.map((r) => r.usable)).toEqual([true, false]);
+  });
+
+  it("saveBatch tolerates re-inserting existing files", async () => {
+    await saveBatch([doc(3)]);
+    expect(await saveBatch([doc(3), doc(4)])).toEqual({ nonDupErrors: 0 });
+    expect(await Replay.countDocuments({ filePath: { $in: ["/bulk/3.slp", "/bulk/4.slp"] } })).toBe(2);
+  });
 });
 
 describe("Replay model", () => {

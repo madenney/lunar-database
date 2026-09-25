@@ -116,15 +116,14 @@ ReplaySchema.pre("save", function () {
   const doc = this as unknown as IReplay;
   doc.usable = isUsableReplay(doc);
 });
-// (cast: mongoose's pre() overloads don't expose the (next, docs) insertMany shape)
-ReplaySchema.pre("insertMany", (function (
-  next: (err?: Error) => void,
-  docs: IReplay[]
-) {
+// Mongoose 9 passes insertMany middleware only the docs array (no `next`
+// callback). The (next, docs) signature from Mongoose 8 threw "next is not a
+// function" on every insertMany, which broke the crawler and submission approval.
+// (cast: mongoose's pre() overloads don't expose the insertMany docs argument)
+ReplaySchema.pre("insertMany", (function (docs: IReplay[]) {
   if (Array.isArray(docs)) {
     for (const doc of docs) doc.usable = isUsableReplay(doc);
   }
-  next();
 }) as never);
 
 ReplaySchema.index({ "players.connectCode": 1 });
