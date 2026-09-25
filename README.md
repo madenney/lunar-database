@@ -62,7 +62,16 @@ npm run crawl
 npm run crawl -- /path/to/slp/files
 ```
 
-The crawler skips files that are already indexed (by file path). Safe to re-run.
+The crawler skips files that are already indexed (by file path) and never follows
+symlinks (the archive keeps ~1M flat-path links for replay_archiver; indexing them
+would duplicate replays). Safe to re-run.
+
+After every crawl, rebuild the player autocomplete summary, which the crawler does
+not maintain:
+
+```bash
+npm run build-players
+```
 
 ## API
 
