@@ -32,7 +32,7 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
       results = await Player.find({})
         .sort({ gameCount: -1 })
         .limit(limitNum)
-        .select("connectCode displayName tag gameCount -_id")
+        .select("connectCode displayName tag aliases gameCount -_id")
         .maxTimeMS(5000)
         .lean();
     } else {
@@ -40,6 +40,8 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
       const or: any[] = [
         { connectCode: prefixRegex },
         { displayName: prefixRegex },
+        // Collection folder names (netplay/<name>), e.g. "Eikelmann" -> TX#490.
+        { aliases: prefixRegex },
       ];
 
       // Tag-overshoot: players often type MORE than the stored connect-code tag —
@@ -57,7 +59,7 @@ router.get("/autocomplete", playerSearchLimiter, async (req: Request, res: Respo
       results = await Player.find({ $or: or })
         .sort({ gameCount: -1 })
         .limit(limitNum)
-        .select("connectCode displayName tag gameCount -_id")
+        .select("connectCode displayName tag aliases gameCount -_id")
         .maxTimeMS(5000)
         .lean();
     }
@@ -97,11 +99,13 @@ router.get("/search", playerSearchLimiter, async (req: Request, res: Response) =
       $or: [
         { connectCode: prefixRegex },
         { displayName: prefixRegex },
+        // Collection folder names (netplay/<name>), e.g. "Eikelmann" -> TX#490.
+        { aliases: prefixRegex },
       ],
     })
       .sort({ gameCount: -1 })
       .limit(limitNum)
-      .select("connectCode displayName tag gameCount -_id")
+      .select("connectCode displayName tag aliases gameCount -_id")
       .maxTimeMS(5000)
       .lean();
 

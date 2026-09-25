@@ -658,7 +658,7 @@ Public catalog of pinned (permanent) download bundles, the ones any visitor may 
 GET /api/players/autocomplete
 ```
 
-Fast prefix search for player connect codes and display names. Designed for search-as-you-type UI.
+Fast prefix search for player connect codes, display names and collection aliases. Designed for search-as-you-type UI. `aliases` are the names of `netplay/<name>` collections the player owns (the connect code in at least half of that folder's games), so `eik` finds `TX#490` via the `Eikelmann` collection.
 
 **Query Parameters**
 
@@ -675,6 +675,7 @@ Fast prefix search for player connect codes and display names. Designed for sear
     "connectCode": "AKLO#0",
     "displayName": "Aklo",
     "tag": null,
+    "aliases": ["Aklo"],
     "gameCount": 4521
   }
 ]

@@ -25,7 +25,34 @@ async function buildPlayers() {
     },
   ];
 
-  const cursor = Replay.aggregate(pipeline).cursor({ batchSize: 5000 });
+  // Collection aliases: each netplay/<name> folder is one player's collection. Its
+  // owner is the connect code present in at least half of the folder's games.
+  console.log("Finding netplay collection owners...");
+  const folder = { $arrayElemAt: [{ $split: ["$folderLabel", "/"] }, 1] };
+  const [ownerCounts, folderTotals] = await Promise.all([
+    Replay.aggregate([
+      { $match: { usable: true, source: "netplay" } },
+      { $project: { folder, codes: "$players.connectCode" } },
+      { $unwind: "$codes" },
+      { $match: { codes: { $ne: null } } },
+      { $group: { _id: { f: "$folder", c: "$codes" }, n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+      { $group: { _id: "$_id.f", code: { $first: "$_id.c" }, n: { $first: "$n" } } },
+    ]).allowDiskUse(true),
+    Replay.aggregate([
+      { $match: { usable: true, source: "netplay" } },
+      { $group: { _id: folder, n: { $sum: 1 } } },
+    ]).allowDiskUse(true),
+  ]);
+  const totals = new Map(folderTotals.map((f: any) => [f._id, f.n]));
+  const aliases = new Map<string, string[]>();
+  for (const o of ownerCounts as any[]) {
+    if (!o._id || !o.code || o.n < 0.5 * (totals.get(o._id) ?? Infinity)) continue;
+    aliases.set(o.code, [...(aliases.get(o.code) ?? []), o._id].sort());
+  }
+  console.log(`${aliases.size} players own a netplay collection.`);
+
+  const cursor = Replay.aggregate(pipeline).allowDiskUse(true).cursor({ batchSize: 5000 });
 
   let upserted = 0;
   let batch: any[] = [];
@@ -41,6 +68,7 @@ async function buildPlayers() {
             displayName: doc.displayName,
             tag: doc.tag,
             gameCount: doc.gameCount,
+            aliases: aliases.get(doc._id) ?? [],
             builtAt,
           },
         },

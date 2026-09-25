@@ -11,6 +11,8 @@ import jobRoutes from "./jobs";
 import statsRoutes, { clearStatsCache } from "./stats";
 import referenceRoutes from "./reference";
 import submissionsRoutes from "./submissions";
+import playersRoutes from "./players";
+import { Player } from "../models/Player";
 
 let app: express.Express;
 let server: http.Server;
@@ -26,6 +28,7 @@ beforeAll(async () => {
   app.use("/api/stats", statsRoutes);
   app.use("/api/reference", referenceRoutes);
   app.use("/api/submissions", submissionsRoutes);
+  app.use("/api/players", playersRoutes);
 
   server = await new Promise<http.Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -801,5 +804,26 @@ describe("GET /api/reference", () => {
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBeGreaterThan(0);
     expect(body[0]).toHaveProperty("name");
+  });
+});
+
+describe("GET /api/players/autocomplete — collection aliases", () => {
+  beforeEach(async () => {
+    await Player.deleteMany({});
+    await Player.create([
+      { connectCode: "TX#490", displayName: "TX-5532", aliases: ["Eikelmann"], gameCount: 1966 },
+      { connectCode: "EIK#1", displayName: "Eiko", gameCount: 3 },
+      { connectCode: "PGP#827", displayName: "PGP", aliases: [], gameCount: 7321 },
+    ]);
+  });
+  afterEach(() => Player.deleteMany({}));
+
+  it("finds a player by their collection folder name as well as code and display name", async () => {
+    const byAlias = await get("/api/players/autocomplete?q=eik");
+    expect(byAlias.body.map((p: any) => p.connectCode)).toEqual(["TX#490", "EIK#1"]);
+    expect(byAlias.body[0].aliases).toEqual(["Eikelmann"]);
+
+    expect((await get("/api/players/autocomplete?q=tx")).body[0].connectCode).toBe("TX#490");
+    expect((await get("/api/players/search?q=eikel")).body.map((p: any) => p.connectCode)).toEqual(["TX#490"]);
   });
 });
