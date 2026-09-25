@@ -1,5 +1,8 @@
 import { Replay } from "../models/Replay";
-import { saveBatch } from "./crawler";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { saveBatch, walkDir } from "./crawler";
 
 // L5: the crawler must skip duplicate-key errors but never swallow real ones.
 describe("crawler saveBatch — non-duplicate error handling (L5)", () => {
@@ -41,5 +44,22 @@ describe("crawler saveBatch — non-duplicate error handling (L5)", () => {
   it("skips a lone duplicate error with no writeErrors array", async () => {
     insertSpy.mockRejectedValue({ code: 11000 });
     expect(await saveBatch([{}])).toEqual({ nonDupErrors: 0 });
+  });
+});
+
+describe("crawler walkDir", () => {
+  it("yields real .slp files only, never symlinks", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "lm-walk-"));
+    try {
+      fs.mkdirSync(path.join(root, "2023-10"));
+      fs.writeFileSync(path.join(root, "2023-10", "Game_1.slp"), "x");
+      fs.writeFileSync(path.join(root, "notes.txt"), "x");
+      fs.symlinkSync("2023-10/Game_1.slp", path.join(root, "Game_1.slp"));
+      fs.symlinkSync("2023-10", path.join(root, "linked-dir"));
+      const found = [...walkDir(root)].map((p) => path.relative(root, p));
+      expect(found).toEqual([path.join("2023-10", "Game_1.slp")]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

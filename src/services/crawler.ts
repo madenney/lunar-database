@@ -8,13 +8,18 @@ import { config } from "../config";
 const WORKER_BATCH = 200; // files per worker message
 const SAVE_BATCH = 1000;  // docs per insertMany
 
-function* walkDir(dir: string): Generator<string> {
+/**
+ * Every real .slp file under dir. Symlinks are skipped (files and directories):
+ * the archive has ~1M flat-path links into month folders, and following them
+ * indexes the same replay twice under two paths.
+ */
+export function* walkDir(dir: string): Generator<string> {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walkDir(fullPath);
-    } else if (entry.name.endsWith(".slp")) {
+    } else if (entry.isFile() && entry.name.endsWith(".slp")) {
       yield fullPath;
     }
   }
