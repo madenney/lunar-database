@@ -22,7 +22,8 @@
     "pin": "ts-node src/scripts/pin.ts",
     "analytics": "ts-node src/scripts/analytics.ts",
     "dashboard": "ts-node src/scripts/dashboard.ts",
-    "build-players": "ts-node src/scripts/buildPlayers.ts"
+    "build-players": "ts-node src/scripts/buildPlayers.ts",
+    "extract-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/extractStats.ts"
   },
   "repository": {
     "type": "git",
