@@ -2,6 +2,16 @@ import mongoose, { Schema, Document } from "mongoose";
 import type { GameStatsSummary } from "../services/gameStats";
 
 /**
+ * Collection name for stats data. STATS_NAMESPACE (e.g. "pilot") keeps a trial
+ * run's summaries and shards apart from the published collections.
+ */
+export function statsCollection(base: string): string {
+  const ns = process.env.STATS_NAMESPACE?.trim();
+  if (ns && !/^[a-z0-9_]+$/i.test(ns)) throw new Error(`Invalid STATS_NAMESPACE: ${ns}`);
+  return ns ? `${base}_${ns}` : base;
+}
+
+/**
  * Full per-game stats extracted from each replay's frames (see services/gameStats.ts
  * and scripts/extractStats.ts). One document per replay. Per-conversion detail is
  * written to compressed files on the archive drive, not here.
@@ -41,7 +51,7 @@ const GameStatsSchema = new Schema<IGameStats>(
     players: { type: [Schema.Types.Mixed], default: undefined },
     extractedAt: { type: Date, required: true },
   },
-  { collection: "gameStats" }
+  { collection: statsCollection("gameStats") }
 );
 
 GameStatsSchema.index({ version: 1 });

@@ -1,7 +1,22 @@
 import { SlippiGame } from "@slippi/slippi-js/node";
+import {
+  detectCombos,
+  detectPhantoms,
+  findEdgeguards,
+  frameBounds,
+  getDeathDirection,
+  DEFAULT_COMBO_TIMEOUT,
+} from "../vendor/replay-analysis";
 
-/** Bump when the extracted shape or rules change; the runner re-extracts older rows. */
-export const STATS_VERSION = 1;
+/**
+ * Bump when the extracted shape or rules change; shards are planned per version.
+ * v2: match/rules/platform context, result evidence, conversion move lists,
+ * deaths with kill moves, and Clipper's combos, edgeguards and phantoms.
+ */
+export const STATS_VERSION = 2;
+
+/** Version of decideWinner's rules, stored with each inferred result. */
+export const RESULT_POLICY = 1;
 
 export type WinMethod = "stocks" | "time" | "lras";
 
@@ -60,10 +75,18 @@ export function decideWinner(g: WinnerInput): { winner: number | null; winMethod
 /** Opening types, stored as small codes in the conversion detail. */
 const OPENING_CODES: Record<string, number> = { "neutral-win": 1, "counter-attack": 2, trade: 3 };
 
+/** Death direction codes in the detail: 0 down, 1 left, 2 right, 3 up. */
+const DIRECTION_CODES: Record<string, number> = { down: 0, left: 1, right: 2, up: 3 };
+
 export interface PlayerGameStats {
   playerIndex: number;
   connectCode: string | null;
   displayName: string | null;
+  /** Slippi account ID (netplay); stable when a player changes code or name. */
+  userId: string | null;
+  nametag: string | null;
+  controllerFix: string | null;
+  teamId: number | null;
   characterId: number | null;
   characterColor: number | null;
   isCpu: boolean;
@@ -84,8 +107,37 @@ export interface PlayerGameStats {
   actions: Record<string, unknown>;
 }
 
+/** Online match context from the replay (Slippi 3.14+); null fields when absent. */
+export interface MatchInfo {
+  /** Set/session ID shared by every game of an online set. */
+  id: string | null;
+  /** "ranked", "unranked", "direct", "teams"… parsed from the ID. */
+  mode: string | null;
+  gameNumber: number | null;
+  tiebreaker: number | null;
+}
+
 export interface GameStatsSummary {
   version: number;
+  slpVersion: string | null;
+  /** Where it was recorded: "dolphin", "network" (console mirroring) or "nintendont". */
+  playedOn: string | null;
+  consoleNick: string | null;
+  match: MatchInfo;
+  rules: {
+    timerType: number | null;
+    startingTimerSeconds: number | null;
+    itemSpawnBehavior: number | null;
+    friendlyFire: boolean | null;
+    gameMode: number | null;
+    isPAL: boolean | null;
+    isFrozenPS: boolean | null;
+  };
+  /** Rollback frames recorded in the file (netplay); not a latency measure. */
+  rollbackFrames: number;
+  /** Observed placements from the game-end event, when the file has them. */
+  placements: { playerIndex: number; position: number | null }[];
+  resultPolicy: number;
   stageId: number | null;
   lastFrame: number;
   gameComplete: boolean;
@@ -99,16 +151,58 @@ export interface GameStatsSummary {
   players: PlayerGameStats[];
 }
 
+/** A landed move: [moveId, frame, damage, hitCount]. */
+export type MoveRow = [number, number, number, number];
+
 /**
  * One compact row per conversion: [attacker, defender, startFrame, endFrame,
- * startPercent, endPercent, moves, didKill (0/1), openingType code].
+ * startPercent, endPercent, moveCount, didKill (0/1), openingType code, moves].
+ * endFrame/endPercent are null when the conversion was still going at game end.
  */
-export type ConversionRow = [number, number, number, number, number, number, number, number, number];
+export type ConversionRow = [number, number, number, number | null, number, number | null, number, number, number, MoveRow[]];
+
+/**
+ * A combo as Clipper's combo parser finds it (45-frame timeout): [comboer,
+ * comboee, startFrame, endFrame, startPercent, endPercent, didKill, moves].
+ * endFrame/endPercent are null when the combo was still going at game end.
+ */
+export type ComboRow = [number, number, number, number | null, number, number | null, number, MoveRow[]];
+
+/**
+ * A lost stock: [victim, deathFrame, percent, direction code | null, killer | null,
+ * killMoveId | null, stockStartFrame]. Killer and move come from the conversion
+ * that took the stock; null for self-destructs and unattributed deaths.
+ */
+export type DeathRow = [number, number, number, number | null, number | null, number | null, number];
+
+/** An edgeguard kill (Clipper's detector): [victim, edgeguarder, startFrame, endFrame, metrics]. */
+export type EdgeguardRow = [number, number, number, number, Record<string, unknown>];
+
+/** A phantom hit (Clipper's detector): [attacker, victim, metrics]. */
+export type PhantomRow = [number, number, Record<string, unknown>];
+
+/** Everything per game that goes to the detail files instead of MongoDB. */
+export interface GameEvents {
+  conversions: ConversionRow[];
+  combos: ComboRow[];
+  deaths: DeathRow[];
+  edgeguards: EdgeguardRow[];
+  phantoms: PhantomRow[];
+}
 
 const round = (n: number | null | undefined, d = 2) => (n == null || !Number.isFinite(n) ? 0 : Math.round(n * 10 ** d) / 10 ** d);
 
-/** Full stats for one replay file. Throws if the file can't be parsed. */
-export function extractGameStats(filePath: string): { summary: GameStatsSummary; conversions: ConversionRow[] } {
+const moveRows = (moves: { moveId: number; frame: number; damage: number; hitCount: number }[]): MoveRow[] =>
+  moves.map((m) => [m.moveId, m.frame, round(m.damage, 1), m.hitCount]);
+
+/** "mode.ranked-2024-…" → "ranked". */
+export function matchMode(id: string | null | undefined): string | null {
+  const m = /^mode\.([a-z]+)/i.exec(id ?? "");
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** Full stats and events for one replay file. Throws if the file can't be parsed. */
+export function extractGameStats(filePath: string): { summary: GameStatsSummary; events: GameEvents } {
   const game = new SlippiGame(filePath);
   const settings = game.getSettings();
   const stats = game.getStats();
@@ -137,6 +231,10 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
       playerIndex: p.playerIndex,
       connectCode: p.connectCode || names?.code || null,
       displayName: p.displayName || names?.netplay || null,
+      userId: p.userId || null,
+      nametag: p.nametag || null,
+      controllerFix: p.controllerFix ?? null,
+      teamId: settings.isTeams ? (p.teamId ?? null) : null,
       characterId: p.characterId ?? null,
       characterColor: p.characterColor ?? null,
       isCpu: p.type === 1,
@@ -161,17 +259,97 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
     c.lastHitBy ?? -1,
     c.playerIndex,
     c.startFrame,
-    c.endFrame ?? lastFrame,
+    c.endFrame ?? null,
     round(c.startPercent),
-    round(c.endPercent ?? c.currentPercent),
+    c.endPercent == null ? null : round(c.endPercent),
     c.moves.length,
     c.didKill ? 1 : 0,
     OPENING_CODES[c.openingType] ?? 0,
+    moveRows(c.moves),
   ]);
+
+  const deaths: DeathRow[] = stats.stocks
+    .filter((st) => st.endFrame != null)
+    .map((st) => {
+      // The conversion that took this stock ends on (or right by) the death frame.
+      const kill = stats.conversions
+        .filter((c) => c.playerIndex === st.playerIndex && c.didKill && c.endFrame != null)
+        .sort((a, b) => Math.abs(a.endFrame! - st.endFrame!) - Math.abs(b.endFrame! - st.endFrame!))[0];
+      const killer = kill && Math.abs(kill.endFrame! - st.endFrame!) <= 60 ? kill : null;
+      const direction = st.deathAnimation != null ? getDeathDirection(st.deathAnimation) : null;
+      return [
+        st.playerIndex,
+        st.endFrame!,
+        round(st.endPercent ?? st.currentPercent),
+        direction ? DIRECTION_CODES[direction] : null,
+        killer?.lastHitBy ?? null,
+        killer?.moves[killer.moves.length - 1]?.moveId ?? null,
+        st.startFrame,
+      ];
+    });
+
+  // Clipper's detectors, on 1v1 games (their rules assume one opponent).
+  const events: GameEvents = { conversions, combos: [], deaths, edgeguards: [], phantoms: [] };
+  if (settingPlayers.length === 2) {
+    const frames = game.getFrames();
+    for (const c of detectCombos(frames, settings, DEFAULT_COMBO_TIMEOUT)) {
+      if (!c.moves.length) continue; // Clipper drops combos without a landed move
+      events.combos.push([
+        c.moves[0].playerIndex,
+        c.playerIndex,
+        c.startFrame,
+        c.endFrame ?? null,
+        round(c.startPercent),
+        c.endPercent == null ? null : round(c.endPercent),
+        c.didKill ? 1 : 0,
+        moveRows(c.moves),
+      ]);
+    }
+    const players = settingPlayers.map((p) => ({ playerIndex: p.playerIndex, characterId: p.characterId ?? -1 }));
+    for (const eg of findEdgeguards(frames, stats.stocks, players, settings.stageId ?? -1)) {
+      events.edgeguards.push([eg.victimIndex, eg.edgeguarderIndex, eg.startFrame, eg.endFrame, eg.metrics]);
+    }
+    const bounds = frameBounds(frames);
+    if (bounds) {
+      for (const ph of detectPhantoms(frames, players.map((p) => p.playerIndex), bounds.min, bounds.max)) {
+        events.phantoms.push([ph.attackerIndex, ph.victimIndex, ph.metrics]);
+      }
+    }
+  }
+
+  const matchInfo = settings.matchInfo;
+  const matchId = matchInfo?.sessionId || matchInfo?.matchId || null;
+  let rollbackFrames = 0;
+  try {
+    rollbackFrames = game.getRollbackFrames().count;
+  } catch {
+    // Older files carry no rollback information.
+  }
 
   return {
     summary: {
       version: STATS_VERSION,
+      slpVersion: settings.slpVersion ?? null,
+      playedOn: meta?.playedOn ?? null,
+      consoleNick: meta?.consoleNick ?? null,
+      match: {
+        id: matchId,
+        mode: matchMode(matchId),
+        gameNumber: matchInfo?.gameNumber ?? null,
+        tiebreaker: matchInfo?.tiebreakerNumber ?? null,
+      },
+      rules: {
+        timerType: settings.timerType ?? null,
+        startingTimerSeconds: settings.startingTimerSeconds ?? null,
+        itemSpawnBehavior: settings.itemSpawnBehavior ?? null,
+        friendlyFire: settings.friendlyFireEnabled ?? null,
+        gameMode: settings.gameMode ?? null,
+        isPAL: settings.isPAL ?? null,
+        isFrozenPS: settings.isFrozenPS ?? null,
+      },
+      rollbackFrames,
+      placements: (end?.placements ?? []).map((pl) => ({ playerIndex: pl.playerIndex, position: pl.position ?? null })),
+      resultPolicy: RESULT_POLICY,
       stageId: settings.stageId ?? null,
       lastFrame,
       gameComplete: !!stats.gameComplete,
@@ -184,6 +362,6 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
       winMethod,
       players,
     },
-    conversions,
+    events,
   };
 }

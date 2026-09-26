@@ -5,6 +5,7 @@ import zlib from "zlib";
 import mongoose from "mongoose";
 import { Replay } from "../models/Replay";
 import { StatsShard } from "../models/StatsShard";
+import { statsCollection } from "../models/GameStats";
 import {
   MAX_ATTEMPTS,
   claimShard,
@@ -121,5 +122,22 @@ describe("publishDetailFile", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("statsCollection", () => {
+  const saved = process.env.STATS_NAMESPACE;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.STATS_NAMESPACE;
+    else process.env.STATS_NAMESPACE = saved;
+  });
+
+  it("keeps a namespaced run apart from the published collections", () => {
+    delete process.env.STATS_NAMESPACE;
+    expect(statsCollection("gameStats")).toBe("gameStats");
+    process.env.STATS_NAMESPACE = "pilot";
+    expect(statsCollection("gameStats")).toBe("gameStats_pilot");
+    process.env.STATS_NAMESPACE = "../x";
+    expect(() => statsCollection("gameStats")).toThrow(/Invalid STATS_NAMESPACE/);
   });
 });

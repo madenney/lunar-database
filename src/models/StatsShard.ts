@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from "mongoose";
+import { statsCollection } from "./GameStats";
 
 export const SHARD_STATUSES = ["pending", "running", "committed", "failed"] as const;
 export type ShardStatus = (typeof SHARD_STATUSES)[number];
@@ -16,6 +17,8 @@ export interface IStatsShard extends Document<string> {
   toId: mongoose.Types.ObjectId;
   /** Usable replays in the range when planned. */
   planned: number;
+  /** Random claim order, so work (and early results) spreads across the archive. */
+  order: number;
   status: ShardStatus;
   owner: string | null;
   leaseUntil: Date | null;
@@ -38,6 +41,7 @@ const StatsShardSchema = new Schema<IStatsShard>(
     fromId: { type: Schema.Types.ObjectId, required: true },
     toId: { type: Schema.Types.ObjectId, required: true },
     planned: { type: Number, required: true },
+    order: { type: Number, required: true },
     status: { type: String, enum: SHARD_STATUSES, default: "pending" },
     owner: { type: String, default: null },
     leaseUntil: { type: Date, default: null },
@@ -51,10 +55,10 @@ const StatsShardSchema = new Schema<IStatsShard>(
     parser: { type: String, default: null },
     committedAt: { type: Date, default: null },
   },
-  { collection: "statsShards" }
+  { collection: statsCollection("statsShards") }
 );
 
-StatsShardSchema.index({ version: 1, status: 1, fromId: 1 });
+StatsShardSchema.index({ version: 1, status: 1, order: 1 });
 StatsShardSchema.index({ version: 1, toId: -1 });
 
 export const StatsShard = mongoose.model<IStatsShard>("StatsShard", StatsShardSchema);

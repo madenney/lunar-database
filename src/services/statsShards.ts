@@ -42,6 +42,7 @@ export async function planShards(version: number, size: number): Promise<number>
       fromId,
       toId: chunk[chunk.length - 1],
       planned: chunk.length,
+      order: Math.random(),
     });
     created++;
     chunk = [];
@@ -67,7 +68,7 @@ export async function claimShard(version: number, owner: string, leaseMs: number
       ],
     },
     { $set: { status: "running", owner, leaseUntil: new Date(now.getTime() + leaseMs) }, $inc: { attempts: 1 } },
-    { sort: { fromId: 1 }, new: true }
+    { sort: { order: 1 }, new: true }
   );
 }
 

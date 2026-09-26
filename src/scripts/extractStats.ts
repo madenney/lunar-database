@@ -1,8 +1,9 @@
 /**
  * Extract full per-game stats from every usable replay.
  *   - gameStats (MongoDB): one summary per replay, for the site and rating fits.
- *   - <detail-dir>/v<version>/<shard>.jsonl.gz: one line per replay, {r: replayId, c: rows},
- *     rows as in gameStats.ts ConversionRow. Kept off MongoDB (~40 GB for the archive).
+ *   - <detail-dir>/v<version>/<shard>.jsonl.gz: one line per replay with its events,
+ *     {r: replayId, c: conversions, k: combos, d: deaths, e: edgeguards, p: phantoms},
+ *     rows as in gameStats.ts (ConversionRow, ComboRow…). Kept off MongoDB.
  *
  * Work is split into shards (fixed replay-ID ranges in the statsShards collection,
  * see services/statsShards.ts). Several machines can run this at once against the
@@ -11,6 +12,10 @@
  *   npm run extract-stats -- --plan [--shard-size N]    plan shards for new usable replays
  *   npm run extract-stats -- --detail-dir DIR [--workers N] [--max-shards N] [--lease-minutes N]
  *   npm run extract-stats -- --status
+ *
+ * STATS_NAMESPACE=pilot writes to gameStats_pilot / statsShards_pilot instead of the
+ * published collections (use a separate --detail-dir too). Shards are claimed in a
+ * random order, so a partial run is spread across the archive.
  *
  * A shard counts as done only when committed. SIGINT/SIGTERM hand the current shard
  * back; a runner that dies loses its lease and the shard is claimed again.
@@ -24,7 +29,7 @@ import { connectDb } from "../db";
 import { config } from "../config";
 import { Replay } from "../models/Replay";
 import { GameStats } from "../models/GameStats";
-import { STATS_VERSION } from "../services/gameStats";
+import { STATS_VERSION, type GameEvents } from "../services/gameStats";
 import {
   claimShard,
   commitShard,
@@ -46,7 +51,7 @@ function option(name: string): string | undefined {
 }
 
 type Job = { id: string; filePath: string };
-type Result = { id: string; summary?: any; conversions?: unknown[]; error?: string };
+type Result = { id: string; summary?: any; events?: GameEvents; error?: string };
 
 function parserVersion(): string {
   try {
@@ -139,7 +144,8 @@ async function main() {
     });
   }
 
-  console.log(`Stats v${STATS_VERSION} runner ${owner}: ${numWorkers} workers, detail in ${detailDir}`);
+  const ns = process.env.STATS_NAMESPACE ? ` [namespace ${process.env.STATS_NAMESPACE}]` : "";
+  console.log(`Stats v${STATS_VERSION} runner ${owner}${ns}: ${numWorkers} workers, detail in ${detailDir}`);
   console.log(await shardStatusCounts(STATS_VERSION));
   const pool = new WorkerPool(numWorkers);
   const started = Date.now();
@@ -164,6 +170,9 @@ async function main() {
       const replays = await Replay.find({ usable: true, _id: { $gte: shard.fromId, $lte: shard.toId } })
         .select({ filePath: 1, source: 1, startAt: 1 })
         .lean();
+      // Read in folder order: the archive is one spinning disk, and neighbouring
+      // files need far fewer seeks (measured ~130 files/s vs ~80 in random order).
+      replays.sort((a, b) => (a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0));
 
       const results: Result[] = [];
       const inFlight = new Set<Promise<void>>();
@@ -186,7 +195,12 @@ async function main() {
 
       // 1. Detail file, durably in place. 2. Summaries tagged with this shard. 3. Commit.
       results.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const lines = results.filter((r) => !r.error).map((r) => JSON.stringify({ r: r.id, c: r.conversions ?? [] }) + "\n");
+      const lines = results
+        .filter((r) => !r.error && r.events)
+        .map((r) => {
+          const e = r.events!;
+          return JSON.stringify({ r: r.id, c: e.conversions, k: e.combos, d: e.deaths, e: e.edgeguards, p: e.phantoms }) + "\n";
+        });
       const file = `v${STATS_VERSION}/${id}.jsonl.gz`;
       const { bytes, sha256 } = publishDetailFile(path.join(detailDir, `v${STATS_VERSION}`), `${id}.jsonl.gz`, lines, owner);
 
