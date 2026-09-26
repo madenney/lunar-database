@@ -201,7 +201,7 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
         .sort({ isFullDb: -1, downloadCount: -1, completedAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .select("filter replayCount bundleSize downloadCount completedAt lastDownloadedAt isFullDb")
+        .select("filter replayCount bundleSize downloadCount completedAt lastDownloadedAt isFullDb snapshotAt")
         .lean(),
       Job.countDocuments(query),
     ]);

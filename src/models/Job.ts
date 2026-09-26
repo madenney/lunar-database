@@ -56,6 +56,9 @@ export interface IJob extends Document {
   /** Marks the single pre-built "entire database" bundle. Surfaced as `fullDb`
    *  in the public bundles list so the frontend can label/route it specially. */
   isFullDb: boolean;
+  /** Full-DB bundle only: when the archive's contents were captured. Replays
+   *  added after this are not in it. Set by scripts/full-db/rebuild.sh. */
+  snapshotAt: Date | null;
   downloadCount: number;
   lastDownloadedAt: Date | null;
   progress: IJobProgress | null;
@@ -127,6 +130,7 @@ const JobSchema = new Schema<IJob>(
     r2Key: { type: String, default: null },
     pinned: { type: Boolean, default: false },
     isFullDb: { type: Boolean, default: false },
+    snapshotAt: { type: Date, default: null },
     downloadCount: { type: Number, default: 0 },
     lastDownloadedAt: { type: Date, default: null },
     progress: { type: JobProgressSchema, default: null },

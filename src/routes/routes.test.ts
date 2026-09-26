@@ -714,6 +714,24 @@ describe("GET /api/jobs/bundles", () => {
     expect(body.bundles.length).toBe(2);
     expect(body.pagination.pages).toBe(2);
   });
+
+  it("lists the full-DB bundle first with its snapshot date", async () => {
+    await Job.create({
+      filter: { p1ConnectCode: "A#1" }, status: "completed", r2Key: "archive/a.zip",
+      pinned: true, replayCount: 10, bundleSize: 5000, downloadCount: 50, completedAt: new Date(),
+    });
+    await Job.create({
+      filter: {}, status: "completed", r2Key: "archive/lunar_db_full.zip", pinned: true, isFullDb: true,
+      replayCount: 3000, bundleSize: 9_000_000, downloadCount: 1, completedAt: new Date(),
+      snapshotAt: new Date("2026-09-26T17:00:00Z"),
+    });
+
+    const { body } = await get("/api/jobs/bundles");
+    expect(body.bundles[0]).toMatchObject({
+      fullDb: true, replayCount: 3000, bundleSize: 9_000_000, snapshotAt: "2026-09-26T17:00:00.000Z",
+    });
+    expect(body.bundles[0]).not.toHaveProperty("isFullDb");
+  });
 });
 
 describe("GET /api/jobs/:id/download — download count", () => {

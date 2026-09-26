@@ -73,6 +73,43 @@ not maintain:
 npm run build-players
 ```
 
+### Full-database download
+
+The "Download Full DB" button serves one pre-built archive,
+`b2:lm-replays/archive/lunar_db_full.zip`: every real replay's `.slpz` (raw `.slp`
+where slpz can't compress it). It is a snapshot; the site shows its date, size and
+replay count. Rebuild it on the worker after large imports:
+
+```bash
+nohup scripts/full-db/rebuild.sh > /dev/null 2>&1 &   # build → verify → upload → register
+tail -f ~/Projects/worker/shared_folder_2/full_db/rebuild.log
+```
+
+The build writes to `shared_folder_2` (a different disk from the archive) and takes
+a few hours; the upload takes days. The old archive keeps serving until the upload
+completes. Rerunning after a failure reuses an unpublished build. The last step,
+`npm run register-full-db -- --size BYTES --replays N --snapshot ISO_DATE`, updates
+the pinned bundle record the site reads.
+
+### Per-game stats
+
+`extract-stats` fills the `gameStats` collection and writes per-conversion detail
+files. Work is split into shards (replay-ID ranges in `statsShards`); any number of
+machines can run it against the same MongoDB and detail directory, each claiming
+shards with an expiring lease. A shard is done only once committed; a killed runner's
+shard is reclaimed when its lease expires. Plan after each crawl, then run:
+
+```bash
+npm run extract-stats -- --plan [--shard-size 5000]
+npm run extract-stats -- --detail-dir DIR [--workers N] [--max-shards N]
+npm run extract-stats -- --status
+```
+
+Another machine needs the replay files (`SLP_ROOT_DIR`, `SLPZ_ARCHIVE_DIR`, read
+only), the detail directory (read-write), `SLPZ_BINARY`, and `MONGODB_URI` reaching
+the worker's MongoDB (for example through an SSH tunnel; don't expose MongoDB on
+the LAN). Shards that fail three times stay `failed` in `--status` for inspection.
+
 ## API
 
 ### `GET /api/replays`

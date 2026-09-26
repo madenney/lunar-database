@@ -12,6 +12,7 @@
     "db:stop": "sudo systemctl stop mongod && echo 'MongoDB stopped'",
     "db:status": "systemctl is-active mongod && mongosh --quiet --eval 'db.stats().collections + \" collections, \" + db.stats().objects + \" documents\"' lm-database",
     "crawl": "ts-node src/scripts/crawl.ts",
+    "register-full-db": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/registerFullDbBundle.ts",
     "crawl:monitor": "ts-node src/scripts/crawlMonitor.ts",
     "test": "jest --forceExit --detectOpenHandles",
     "create-admin": "ts-node src/scripts/createAdmin.ts",

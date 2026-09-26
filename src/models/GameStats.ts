@@ -11,6 +11,8 @@ export interface IGameStats extends Document, Partial<GameStatsSummary> {
   filePath: string;
   source: string | null;
   startAt: Date | null;
+  /** The statsShards record this row was written by; its detail lives in that shard's file. */
+  shard: string | null;
   /** Set instead of stats when the replay could not be parsed. */
   error: string | null;
   extractedAt: Date;
@@ -23,6 +25,7 @@ const GameStatsSchema = new Schema<IGameStats>(
     source: { type: String, default: null },
     startAt: { type: Date, default: null },
     version: { type: Number, required: true },
+    shard: { type: String, default: null },
     error: { type: String, default: null },
     stageId: Number,
     lastFrame: Number,

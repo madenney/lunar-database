@@ -647,6 +647,7 @@ Public catalog of pinned (permanent) download bundles, the ones any visitor may 
 | `downloadCount` | number | Number of times this bundle has been downloaded. |
 | `completedAt` | string | ISO 8601 timestamp when the bundle was created. |
 | `fullDb` | boolean | `true` for the full-database bundle. |
+| `snapshotAt` | string \| null | Full-database bundle only: ISO 8601 time its contents were captured. Replays added later are not included; `replayCount` and `bundleSize` describe that snapshot. |
 
 ---
 
