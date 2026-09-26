@@ -76,6 +76,7 @@ describe("extractGameStats", () => {
     expect(summary.rules).toHaveProperty("startingTimerSeconds");
     expect(summary.rollbackFrames).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(summary.placements)).toBe(true);
+    expect(summary.detectorErrors).toEqual([]);
   });
 
   it("emits conversion rows with their moves", () => {

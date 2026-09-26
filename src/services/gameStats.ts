@@ -138,6 +138,8 @@ export interface GameStatsSummary {
   /** Observed placements from the game-end event, when the file has them. */
   placements: { playerIndex: number; position: number | null }[];
   resultPolicy: number;
+  /** Detectors that threw on this file (their events are missing, not empty). */
+  detectorErrors: string[];
   stageId: number | null;
   lastFrame: number;
   gameComplete: boolean;
@@ -290,31 +292,50 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
 
   // Clipper's detectors, on 1v1 games (their rules assume one opponent).
   const events: GameEvents = { conversions, combos: [], deaths, edgeguards: [], phantoms: [] };
+  const detectorErrors: string[] = [];
+  const attempt = (name: string, run: () => void) => {
+    try {
+      run();
+    } catch {
+      detectorErrors.push(name); // e.g. a frame without player data in a damaged file
+    }
+  };
   if (settingPlayers.length === 2) {
     const frames = game.getFrames();
-    for (const c of detectCombos(frames, settings, DEFAULT_COMBO_TIMEOUT)) {
-      if (!c.moves.length) continue; // Clipper drops combos without a landed move
-      events.combos.push([
-        c.moves[0].playerIndex,
-        c.playerIndex,
-        c.startFrame,
-        c.endFrame ?? null,
-        round(c.startPercent),
-        c.endPercent == null ? null : round(c.endPercent),
-        c.didKill ? 1 : 0,
-        moveRows(c.moves),
-      ]);
-    }
-    const players = settingPlayers.map((p) => ({ playerIndex: p.playerIndex, characterId: p.characterId ?? -1 }));
-    for (const eg of findEdgeguards(frames, stats.stocks, players, settings.stageId ?? -1)) {
-      events.edgeguards.push([eg.victimIndex, eg.edgeguarderIndex, eg.startFrame, eg.endFrame, eg.metrics]);
-    }
-    const bounds = frameBounds(frames);
-    if (bounds) {
-      for (const ph of detectPhantoms(frames, players.map((p) => p.playerIndex), bounds.min, bounds.max)) {
-        events.phantoms.push([ph.attackerIndex, ph.victimIndex, ph.metrics]);
+    attempt("combos", () => {
+      const rows: ComboRow[] = [];
+      for (const c of detectCombos(frames, settings, DEFAULT_COMBO_TIMEOUT)) {
+        if (!c.moves.length) continue; // Clipper drops combos without a landed move
+        rows.push([
+          c.moves[0].playerIndex,
+          c.playerIndex,
+          c.startFrame,
+          c.endFrame ?? null,
+          round(c.startPercent),
+          c.endPercent == null ? null : round(c.endPercent),
+          c.didKill ? 1 : 0,
+          moveRows(c.moves),
+        ]);
       }
-    }
+      events.combos = rows;
+    });
+    const players = settingPlayers.map((p) => ({ playerIndex: p.playerIndex, characterId: p.characterId ?? -1 }));
+    attempt("edgeguards", () => {
+      events.edgeguards = findEdgeguards(frames, stats.stocks, players, settings.stageId ?? -1).map((eg) => [
+        eg.victimIndex,
+        eg.edgeguarderIndex,
+        eg.startFrame,
+        eg.endFrame,
+        eg.metrics,
+      ]);
+    });
+    attempt("phantoms", () => {
+      const bounds = frameBounds(frames);
+      if (!bounds) return;
+      events.phantoms = detectPhantoms(frames, players.map((p) => p.playerIndex), bounds.min, bounds.max).map(
+        (ph) => [ph.attackerIndex, ph.victimIndex, ph.metrics]
+      );
+    });
   }
 
   const matchInfo = settings.matchInfo;
@@ -350,6 +371,7 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
       rollbackFrames,
       placements: (end?.placements ?? []).map((pl) => ({ playerIndex: pl.playerIndex, position: pl.position ?? null })),
       resultPolicy: RESULT_POLICY,
+      detectorErrors,
       stageId: settings.stageId ?? null,
       lastFrame,
       gameComplete: !!stats.gameComplete,

@@ -37,6 +37,17 @@ const GameStatsSchema = new Schema<IGameStats>(
     version: { type: Number, required: true },
     shard: { type: String, default: null },
     error: { type: String, default: null },
+    // v2 context (see GameStatsSummary). Every summary field must be declared here:
+    // Mongoose drops undeclared fields on write.
+    slpVersion: String,
+    playedOn: String,
+    consoleNick: String,
+    match: { type: Schema.Types.Mixed, default: undefined },
+    rules: { type: Schema.Types.Mixed, default: undefined },
+    rollbackFrames: Number,
+    placements: { type: [Schema.Types.Mixed], default: undefined },
+    resultPolicy: Number,
+    detectorErrors: { type: [String], default: undefined },
     stageId: Number,
     lastFrame: Number,
     gameComplete: Boolean,

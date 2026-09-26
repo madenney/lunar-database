@@ -5,7 +5,8 @@ import zlib from "zlib";
 import mongoose from "mongoose";
 import { Replay } from "../models/Replay";
 import { StatsShard } from "../models/StatsShard";
-import { statsCollection } from "../models/GameStats";
+import { GameStats, statsCollection } from "../models/GameStats";
+import { extractGameStats } from "./gameStats";
 import {
   MAX_ATTEMPTS,
   claimShard,
@@ -139,5 +140,25 @@ describe("statsCollection", () => {
     expect(statsCollection("gameStats")).toBe("gameStats_pilot");
     process.env.STATS_NAMESPACE = "../x";
     expect(() => statsCollection("gameStats")).toThrow(/Invalid STATS_NAMESPACE/);
+  });
+});
+
+describe("GameStats model", () => {
+  it("keeps every field of an extracted summary (undeclared fields would be dropped)", async () => {
+    const { summary } = extractGameStats(path.join(__dirname, "../__fixtures__/test.slp"));
+    const replayId = new mongoose.Types.ObjectId();
+    await GameStats.bulkWrite([
+      {
+        replaceOne: {
+          filter: { replayId },
+          replacement: { replayId, filePath: "t.slp", source: null, startAt: null, shard: "s", extractedAt: new Date(), ...summary, error: null } as any,
+          upsert: true,
+        },
+      },
+    ]);
+    const stored = await GameStats.collection.findOne({ replayId });
+    for (const key of Object.keys(summary)) expect(stored).toHaveProperty(key);
+    expect(stored!.match).toEqual(summary.match);
+    await GameStats.deleteMany({});
   });
 });
