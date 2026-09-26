@@ -4,15 +4,23 @@ import { statsCollection } from "./GameStats";
 export const SHARD_STATUSES = ["pending", "running", "committed", "failed"] as const;
 export type ShardStatus = (typeof SHARD_STATUSES)[number];
 
+/** A published detail file: one per extractor with events, per shard. */
+export interface ShardFile {
+  file: string;
+  lines: number;
+  bytes: number;
+  sha256: string;
+}
+
 /**
  * One unit of stats-extraction work: the usable replays with IDs in [fromId, toId]
- * at one STATS_VERSION (see services/statsShards.ts). Any machine may claim a
- * pending shard; a shard is done only once its detail file and summaries are
+ * for one stats run (see services/statsShards.ts). Any machine may claim a
+ * pending shard; a shard is done only once its detail files and summaries are
  * published and the record is committed.
  */
 export interface IStatsShard extends Document<string> {
   _id: string;
-  version: number;
+  run: string;
   fromId: mongoose.Types.ObjectId;
   toId: mongoose.Types.ObjectId;
   /** Usable replays in the range when planned. */
@@ -27,9 +35,7 @@ export interface IStatsShard extends Document<string> {
   /** Set on commit. */
   games: number | null;
   failedGames: number | null;
-  file: string | null;
-  bytes: number | null;
-  sha256: string | null;
+  files: Record<string, ShardFile> | null;
   parser: string | null;
   committedAt: Date | null;
 }
@@ -37,7 +43,7 @@ export interface IStatsShard extends Document<string> {
 const StatsShardSchema = new Schema<IStatsShard>(
   {
     _id: { type: String, required: true },
-    version: { type: Number, required: true },
+    run: { type: String, required: true },
     fromId: { type: Schema.Types.ObjectId, required: true },
     toId: { type: Schema.Types.ObjectId, required: true },
     planned: { type: Number, required: true },
@@ -49,16 +55,14 @@ const StatsShardSchema = new Schema<IStatsShard>(
     lastError: { type: String, default: null },
     games: { type: Number, default: null },
     failedGames: { type: Number, default: null },
-    file: { type: String, default: null },
-    bytes: { type: Number, default: null },
-    sha256: { type: String, default: null },
+    files: { type: Schema.Types.Mixed, default: null },
     parser: { type: String, default: null },
     committedAt: { type: Date, default: null },
   },
   { collection: statsCollection("statsShards") }
 );
 
-StatsShardSchema.index({ version: 1, status: 1, order: 1 });
-StatsShardSchema.index({ version: 1, toId: -1 });
+StatsShardSchema.index({ run: 1, status: 1, order: 1 });
+StatsShardSchema.index({ run: 1, toId: -1 });
 
 export const StatsShard = mongoose.model<IStatsShard>("StatsShard", StatsShardSchema);

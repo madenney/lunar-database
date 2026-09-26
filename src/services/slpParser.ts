@@ -1,6 +1,7 @@
 import { SlippiGame } from "@slippi/slippi-js/node";
 import { stages, characters } from "@slippi/slippi-js";
 import { IReplayPlayer } from "../models/Replay";
+import { readMatchInfo } from "./matchInfo";
 
 export interface ParsedReplay {
   stageId: number | null;
@@ -9,6 +10,12 @@ export interface ParsedReplay {
   duration: number | null;
   players: IReplayPlayer[];
   winner: number | null;
+  /** Online set/session ID (Slippi 3.14+), shared by every game of a set. */
+  matchId: string | null;
+  gameNumber: number | null;
+  tiebreaker: number | null;
+  /** "ranked", "unranked", "direct", "teams"… from the match ID. */
+  mode: string | null;
 }
 
 export function parseSlpFile(filePath: string): ParsedReplay {
@@ -55,5 +62,18 @@ export function parseSlpFile(filePath: string): ParsedReplay {
 
   const duration = metadata?.lastFrame ?? null;
 
-  return { stageId, stageName, startAt, duration, players, winner: null };
+  const match = readMatchInfo(settings?.matchInfo);
+
+  return {
+    stageId,
+    stageName,
+    startAt,
+    duration,
+    players,
+    winner: null,
+    matchId: match.id,
+    gameNumber: match.gameNumber,
+    tiebreaker: match.tiebreaker,
+    mode: match.mode,
+  };
 }

@@ -67,6 +67,11 @@ export interface IReplay extends Document {
   duration: number | null; // frames
   players: IReplayPlayer[];
   winner: number | null; // playerIndex of winner, null if inconclusive
+  // Online match context (Slippi 3.14+), written by the crawl; null when absent.
+  matchId: string | null; // set/session ID shared by every game of a set
+  gameNumber: number | null;
+  tiebreaker: number | null;
+  mode: string | null; // "ranked" | "unranked" | "direct" | "teams"…
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
@@ -96,6 +101,10 @@ const ReplaySchema = new Schema<IReplay>({
   duration: { type: Number, default: null },
   players: { type: [PlayerSchema], default: [] },
   winner: { type: Number, default: null },
+  matchId: { type: String, default: null },
+  gameNumber: { type: Number, default: null },
+  tiebreaker: { type: Number, default: null },
+  mode: { type: String, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
   usable: { type: Boolean, default: null },
@@ -131,6 +140,9 @@ ReplaySchema.index({ "players.characterId": 1 });
 ReplaySchema.index({ stageId: 1 });
 ReplaySchema.index({ startAt: 1 });
 ReplaySchema.index({ source: 1 });
+// Groups the games of an online set. Partial: only replays that carry a match ID
+// are indexed, so older files cost nothing.
+ReplaySchema.index({ matchId: 1, gameNumber: 1 }, { partialFilterExpression: { matchId: { $type: "string" } } });
 // Serves the common estimate/search shape: match on source + usable, then sum
 // fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
 // (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.

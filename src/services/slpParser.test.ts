@@ -1,5 +1,6 @@
 import path from "path";
 import { parseSlpFile } from "./slpParser";
+import { matchMode } from "./matchInfo";
 
 const FIXTURE = path.join(__dirname, "../__fixtures__/test.slp");
 
@@ -60,6 +61,13 @@ describe("slpParser", () => {
       expect(typeof result.duration).toBe("number");
       expect(result.duration).toBeGreaterThan(0);
     }
+  });
+
+  it("returns online match info, null when the replay has none", () => {
+    const result = parseSlpFile(FIXTURE);
+    for (const key of ["matchId", "gameNumber", "tiebreaker", "mode"] as const) expect(result).toHaveProperty(key);
+    if (result.matchId) expect(result.mode).toBe(matchMode(result.matchId));
+    else expect(result.mode).toBeNull();
   });
 
   it("throws on a non-existent file", () => {

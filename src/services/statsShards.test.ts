@@ -6,9 +6,12 @@ import mongoose from "mongoose";
 import { Replay } from "../models/Replay";
 import { StatsShard } from "../models/StatsShard";
 import { GameStats, statsCollection } from "../models/GameStats";
-import { extractGameStats } from "./gameStats";
+import { extractGame, EXTRACTORS } from "./gameStats";
+import { StatsRun } from "../models/StatsRun";
 import {
   MAX_ATTEMPTS,
+  assertRunMatchesCode,
+  ensureRun,
   claimShard,
   commitShard,
   failShard,
@@ -19,7 +22,7 @@ import {
   shardStatusCounts,
 } from "./statsShards";
 
-const V = 99;
+const V = "test-run";
 const LEASE = 60_000;
 
 beforeAll(async () => {
@@ -48,7 +51,7 @@ describe("planShards", () => {
     await addReplays(12);
     await addReplays(3, false);
     expect(await planShards(V, 5)).toBe(3);
-    const shards = await StatsShard.find({ version: V }).sort({ fromId: 1 }).lean();
+    const shards = await StatsShard.find({ run: V }).sort({ fromId: 1 }).lean();
     expect(shards.map((s) => s.planned)).toEqual([5, 5, 2]);
 
     expect(await planShards(V, 5)).toBe(0);
@@ -78,15 +81,15 @@ describe("claims and leases", () => {
     expect(b!._id).toBe(a!._id);
     expect(b!.attempts).toBe(2);
     expect(await renewLease(a!._id, "a", LEASE)).toBe(false);
-    expect(await commitShard(a!._id, "a", { games: 2, failedGames: 0, file: "f", bytes: 1, sha256: "s", parser: "p" })).toBe(false);
-    expect(await commitShard(b!._id, "b", { games: 2, failedGames: 0, file: "f", bytes: 1, sha256: "s", parser: "p" })).toBe(true);
+    expect(await commitShard(a!._id, "a", { games: 2, failedGames: 0, files: {}, parser: "p" })).toBe(false);
+    expect(await commitShard(b!._id, "b", { games: 2, failedGames: 0, files: {}, parser: "p" })).toBe(true);
     expect((await StatsShard.findById(b!._id).lean())!.status).toBe("committed");
   });
 
   it("never hands out committed shards", async () => {
     for (const owner of ["a", "b"]) {
       const s = await claimShard(V, owner, LEASE);
-      await commitShard(s!._id, owner, { games: 2, failedGames: 0, file: "f", bytes: 1, sha256: "s", parser: "p" });
+      await commitShard(s!._id, owner, { games: 2, failedGames: 0, files: {}, parser: "p" });
     }
     expect(await claimShard(V, "c", -1)).toBeNull();
   });
@@ -143,22 +146,42 @@ describe("statsCollection", () => {
   });
 });
 
-describe("GameStats model", () => {
-  it("keeps every field of an extracted summary (undeclared fields would be dropped)", async () => {
-    const { summary } = extractGameStats(path.join(__dirname, "../__fixtures__/test.slp"));
+describe("runs", () => {
+  afterEach(async () => {
+    await StatsRun.deleteMany({});
+  });
+
+  it("records the code's extractor versions and returns the same run when planned again", async () => {
+    const run = await ensureRun("main", ["core", "clipper"], "parser@1", "me");
+    expect(run.extractors).toEqual({ core: EXTRACTORS.core, clipper: EXTRACTORS.clipper });
+    expect((await ensureRun("main", ["core"], "parser@1", "me")).extractors).toEqual(run.extractors);
+  });
+
+  it("refuses a second run for an extractor version another run computes", async () => {
+    await ensureRun("main", ["core", "clipper"], "p", "me");
+    await expect(ensureRun("again", ["clipper"], "p", "me")).rejects.toThrow(/already computes clipper/);
+    await expect(ensureRun("addon", ["identity"], "p", "me")).resolves.toBeTruthy();
+  });
+
+  it("rejects bad run names and runs whose versions no longer match the code", async () => {
+    await expect(ensureRun("../x", ["core"], "p", "me")).rejects.toThrow(/Invalid run name/);
+    expect(() => assertRunMatchesCode({ _id: "old", extractors: { core: EXTRACTORS.core - 1 } })).toThrow(/start a new run/);
+  });
+});
+
+describe("GameStats writes", () => {
+  it("keep every extracted field, and a later run adds to the record without removing others", async () => {
+    const x = extractGame(path.join(__dirname, "../__fixtures__/test.slp"));
     const replayId = new mongoose.Types.ObjectId();
-    await GameStats.bulkWrite([
-      {
-        replaceOne: {
-          filter: { replayId },
-          replacement: { replayId, filePath: "t.slp", source: null, startAt: null, shard: "s", extractedAt: new Date(), ...summary, error: null } as any,
-          upsert: true,
-        },
-      },
-    ]);
+    const write = (set: Record<string, unknown>) =>
+      GameStats.collection.updateOne({ replayId }, { $set: { filePath: "t.slp", extractedAt: new Date(), ...set } }, { upsert: true });
+    const { contentHash, fingerprint, gecko, ...rest } = x.fields;
+    await write({ ...rest, "extractors.core": 2 });
+    await write({ contentHash, fingerprint, gecko, "extractors.identity": 1 });
     const stored = await GameStats.collection.findOne({ replayId });
-    for (const key of Object.keys(summary)) expect(stored).toHaveProperty(key);
-    expect(stored!.match).toEqual(summary.match);
+    for (const key of Object.keys(x.fields)) expect(stored).toHaveProperty(key);
+    expect(stored!.match).toEqual(x.fields.match);
+    expect(stored!.extractors).toEqual({ core: 2, identity: 1 });
     await GameStats.deleteMany({});
   });
 });

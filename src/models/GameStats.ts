@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from "mongoose";
-import type { GameStatsSummary } from "../services/gameStats";
+import type { CoreSummary, ExtractorName, IdentitySummary, TechLedgeCounts } from "../services/gameStats";
+import type { PositionStats } from "../vendor/replay-analysis";
 
 /**
  * Collection name for stats data. STATS_NAMESPACE (e.g. "pilot") keeps a trial
@@ -12,18 +13,29 @@ export function statsCollection(base: string): string {
 }
 
 /**
- * Full per-game stats extracted from each replay's frames (see services/gameStats.ts
- * and scripts/extractStats.ts). One document per replay. Per-conversion detail is
- * written to compressed files on the archive drive, not here.
+ * Per-game stats (see services/gameStats.ts and scripts/extractStats.ts): one
+ * document per replay, built up by independently versioned extractors. Each
+ * extractor $sets only its own fields and records its version in `extractors`,
+ * so runs can add or replace one extractor without redoing the rest. Events go to
+ * compressed detail files on the archive drive, not here.
+ *
+ * Writes go through the raw collection (scripts/extractStats.ts), so a field is
+ * never dropped for being undeclared; the schema below documents them for reads.
  */
-export interface IGameStats extends Document, Partial<GameStatsSummary> {
+export interface IGameStats extends Document, Partial<CoreSummary>, Partial<IdentitySummary> {
   replayId: mongoose.Types.ObjectId;
   filePath: string;
   source: string | null;
   startAt: Date | null;
-  /** The statsShards record this row was written by; its detail lives in that shard's file. */
-  shard: string | null;
-  /** Set instead of stats when the replay could not be parsed. */
+  /** Extractor name -> version that produced its fields. */
+  extractors: Partial<Record<ExtractorName, number>>;
+  /** Extractor name -> sub-detectors that threw (their events are missing, not empty). */
+  extractorErrors?: Partial<Record<ExtractorName, string[]>>;
+  /** Extractor name -> the stats run and shard that last wrote it. */
+  shards: Partial<Record<ExtractorName, string>>;
+  position?: PositionStats;
+  techLedge?: TechLedgeCounts;
+  /** Set when the replay could not be parsed at all. */
   error: string | null;
   extractedAt: Date;
 }
@@ -34,11 +46,11 @@ const GameStatsSchema = new Schema<IGameStats>(
     filePath: { type: String, required: true },
     source: { type: String, default: null },
     startAt: { type: Date, default: null },
-    version: { type: Number, required: true },
-    shard: { type: String, default: null },
+    extractors: { type: Schema.Types.Mixed, default: {} },
+    extractorErrors: { type: Schema.Types.Mixed, default: undefined },
+    shards: { type: Schema.Types.Mixed, default: {} },
     error: { type: String, default: null },
-    // v2 context (see GameStatsSummary). Every summary field must be declared here:
-    // Mongoose drops undeclared fields on write.
+    // core
     slpVersion: String,
     playedOn: String,
     consoleNick: String,
@@ -47,7 +59,6 @@ const GameStatsSchema = new Schema<IGameStats>(
     rollbackFrames: Number,
     placements: { type: [Schema.Types.Mixed], default: undefined },
     resultPolicy: Number,
-    detectorErrors: { type: [String], default: undefined },
     stageId: Number,
     lastFrame: Number,
     gameComplete: Boolean,
@@ -60,12 +71,21 @@ const GameStatsSchema = new Schema<IGameStats>(
     winMethod: String,
     // Per-player stats, including nested input and action counts.
     players: { type: [Schema.Types.Mixed], default: undefined },
+    // identity
+    contentHash: String,
+    fingerprint: String,
+    gecko: { type: Schema.Types.Mixed, default: undefined },
+    // position, techLedge
+    position: { type: Schema.Types.Mixed, default: undefined },
+    techLedge: { type: Schema.Types.Mixed, default: undefined },
     extractedAt: { type: Date, required: true },
   },
   { collection: statsCollection("gameStats") }
 );
 
-GameStatsSchema.index({ version: 1 });
+GameStatsSchema.index({ "extractors.core": 1 });
 GameStatsSchema.index({ "players.connectCode": 1 });
+GameStatsSchema.index({ contentHash: 1 });
+GameStatsSchema.index({ fingerprint: 1 });
 
 export const GameStats = mongoose.model<IGameStats>("GameStats", GameStatsSchema);

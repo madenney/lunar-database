@@ -93,22 +93,40 @@ the pinned bundle record the site reads.
 
 ### Per-game stats
 
-`extract-stats` fills the `gameStats` collection and writes per-conversion detail
-files. Work is split into shards (replay-ID ranges in `statsShards`); any number of
-machines can run it against the same MongoDB and detail directory, each claiming
-shards with an expiring lease. A shard is done only once committed; a killed runner's
-shard is reclaimed when its lease expires. Plan after each crawl, then run:
+`extract-stats` fills the `gameStats` collection (one document per replay) and
+writes per-game event files. Extraction is split into independently versioned
+extractors (`EXTRACTORS` in `src/services/gameStats.ts`): `core` (context,
+result, per-player stats; conversions, deaths), `clipper` (Clipper's combos,
+edgeguards, phantoms, early quit-outs), `identity` (content hash, cross-recording
+fingerprint, Gecko codes), `position` (stage position/posture) and `techLedge`
+(tech, getup and ledge options). Each writes only its own fields plus
+`extractors.<name>` (its version), and its events to
+`<detail-dir>/<name>/v<version>/<shard>.jsonl.gz`.
+
+A **run** names the extractors it computes and is fixed to their versions
+(`statsRuns`). The first run computes everything; later runs add a new extractor
+or recompute one whose version was bumped, leaving the rest untouched. Plan a run
+again after a crawl to extend it to the new replays.
+
+Work is split into shards (replay-ID ranges in `statsShards`) claimed in random
+order with expiring leases, so any number of machines can run it against the
+same MongoDB and detail directory. A shard is done only once committed; a killed
+runner's shard is reclaimed when its lease expires.
 
 ```bash
-npm run extract-stats -- --plan [--shard-size 5000]
-npm run extract-stats -- --detail-dir DIR [--workers N] [--max-shards N]
-npm run extract-stats -- --status
+npm run extract-stats -- --run main --plan [--extractors core,clipper] [--shard-size 5000]
+npm run extract-stats -- --run main --detail-dir DIR [--workers N] [--max-shards N]
+npm run extract-stats -- --run main --status
+npm run extract-stats -- --runs
+STATS_NAMESPACE=pilot npm run extract-stats -- ...   # trial run in *_pilot collections
 ```
 
-Another machine needs the replay files (`SLP_ROOT_DIR`, `SLPZ_ARCHIVE_DIR`, read
-only), the detail directory (read-write), `SLPZ_BINARY`, and `MONGODB_URI` reaching
-the worker's MongoDB (for example through an SSH tunnel; don't expose MongoDB on
-the LAN). Shards that fail three times stay `failed` in `--status` for inspection.
+Another machine needs the replay files (read only), the detail directory
+(read-write), `slpz`, and MongoDB through an SSH tunnel (don't expose MongoDB on the
+LAN): `scripts/stats/run-extractor.sh` opens the tunnel and starts a runner from
+`~/.config/lunar-stats/env`. Shards that fail three times stay `failed` in
+`--status`. After a run, `npm run backfill-match-info -- --apply` copies match info
+onto replays crawled before it was recorded at crawl time.
 
 ## API
 

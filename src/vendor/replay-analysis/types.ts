@@ -15,6 +15,7 @@ export interface PostFrame {
   positionX?: number | null
   positionY?: number | null
   isAirborne?: boolean | null
+  facingDirection?: number | null
 }
 
 /** One frame (slippi-js `FrameEntryType`). */

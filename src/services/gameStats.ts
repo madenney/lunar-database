@@ -1,19 +1,44 @@
+import crypto from "crypto";
+import fs from "fs";
 import { SlippiGame } from "@slippi/slippi-js/node";
 import {
   detectCombos,
   detectPhantoms,
+  findEarlyQuitOut,
   findEdgeguards,
   frameBounds,
   getDeathDirection,
+  positionStats,
+  techLedgeEvents,
   DEFAULT_COMBO_TIMEOUT,
+  type PositionStats,
 } from "../vendor/replay-analysis";
+import { readMatchInfo, type MatchInfo } from "./matchInfo";
+
+export { matchMode } from "./matchInfo";
 
 /**
- * Bump when the extracted shape or rules change; shards are planned per version.
- * v2: match/rules/platform context, result evidence, conversion move lists,
- * deaths with kill moves, and Clipper's combos, edgeguards and phantoms.
+ * Independently versioned pieces of the extraction. Bump an extractor's version
+ * when its output (fields, events or rules) changes; a new stats run then
+ * recomputes just that extractor. Adding an extractor needs a run for it alone.
+ * Each one's summary fields are $set on the game's record without touching the
+ * others, and its events go to detail/<name>/v<version>/.
+ *
+ *  core      game/match/rules context, result, per-player stats; conversions, deaths
+ *  clipper   Clipper's combos, edgeguards, phantoms and early quit-outs (1v1)
+ *  identity  content hash, cross-recording fingerprint, Gecko code list
+ *  position  stage position/posture per player, distance between players
+ *  techLedge tech, getup and ledge options (events + per-player counts)
  */
-export const STATS_VERSION = 2;
+export const EXTRACTORS = {
+  core: 2,
+  clipper: 1,
+  identity: 1,
+  position: 1,
+  techLedge: 1,
+} as const;
+export type ExtractorName = keyof typeof EXTRACTORS;
+export const EXTRACTOR_NAMES = Object.keys(EXTRACTORS) as ExtractorName[];
 
 /** Version of decideWinner's rules, stored with each inferred result. */
 export const RESULT_POLICY = 1;
@@ -107,18 +132,8 @@ export interface PlayerGameStats {
   actions: Record<string, unknown>;
 }
 
-/** Online match context from the replay (Slippi 3.14+); null fields when absent. */
-export interface MatchInfo {
-  /** Set/session ID shared by every game of an online set. */
-  id: string | null;
-  /** "ranked", "unranked", "direct", "teams"… parsed from the ID. */
-  mode: string | null;
-  gameNumber: number | null;
-  tiebreaker: number | null;
-}
-
-export interface GameStatsSummary {
-  version: number;
+/** Summary fields written by the core extractor. */
+export interface CoreSummary {
   slpVersion: string | null;
   /** Where it was recorded: "dolphin", "network" (console mirroring) or "nintendont". */
   playedOn: string | null;
@@ -138,8 +153,6 @@ export interface GameStatsSummary {
   /** Observed placements from the game-end event, when the file has them. */
   placements: { playerIndex: number; position: number | null }[];
   resultPolicy: number;
-  /** Detectors that threw on this file (their events are missing, not empty). */
-  detectorErrors: string[];
   stageId: number | null;
   lastFrame: number;
   gameComplete: boolean;
@@ -183,13 +196,38 @@ export type EdgeguardRow = [number, number, number, number, Record<string, unkno
 /** A phantom hit (Clipper's detector): [attacker, victim, metrics]. */
 export type PhantomRow = [number, number, Record<string, unknown>];
 
-/** Everything per game that goes to the detail files instead of MongoDB. */
-export interface GameEvents {
-  conversions: ConversionRow[];
-  combos: ComboRow[];
-  deaths: DeathRow[];
-  edgeguards: EdgeguardRow[];
-  phantoms: PhantomRow[];
+/** An early quit-out (denied kill): [comboer, quitter, startFrame, quitFrame, startPercent, percentAtQuit, moves]. */
+export type EarlyQuitOutRow = [number, number, number, number, number, number, MoveRow[]];
+
+/** A tech/getup/ledge choice: [player, frame, kind, option, "toward" | "away" | null, percent]. */
+export type TechLedgeRow = [number, number, string, string, string | null, number];
+
+/** Summary fields written by the identity extractor. */
+export interface IdentitySummary {
+  /** SHA-256 of the replay bytes: one byte-identical recording. */
+  contentHash: string;
+  /**
+   * Same for every recording of one played game (both players' netplay files,
+   * console + mirror): stage, RNG seed, ports/characters/colors/codes and the
+   * online session. Candidate duplicates, confirmed by later matching.
+   */
+  fingerprint: string;
+  gecko: { count: number; hash: string | null };
+}
+
+/** Per-player tech/getup/ledge option counts, from the techLedge events. */
+export type TechLedgeCounts = Record<string, Record<string, number>>;
+
+/** Output of one or more extractors for one game. */
+export interface GameExtraction {
+  /** Summary fields, $set on the game's record. */
+  fields: Record<string, unknown>;
+  /** Extractors that ran, with their versions. */
+  versions: Partial<Record<ExtractorName, number>>;
+  /** Sub-detectors that threw, per extractor (their events are missing, not empty). */
+  errors: Partial<Record<ExtractorName, string[]>>;
+  /** Detail events per extractor, keyed by event type. */
+  events: Partial<Record<ExtractorName, Record<string, unknown>>>;
 }
 
 const round = (n: number | null | undefined, d = 2) => (n == null || !Number.isFinite(n) ? 0 : Math.round(n * 10 ** d) / 10 ** d);
@@ -197,21 +235,149 @@ const round = (n: number | null | undefined, d = 2) => (n == null || !Number.isF
 const moveRows = (moves: { moveId: number; frame: number; damage: number; hitCount: number }[]): MoveRow[] =>
   moves.map((m) => [m.moveId, m.frame, round(m.damage, 1), m.hitCount]);
 
-/** "mode.ranked-2024-…" → "ranked". */
-export function matchMode(id: string | null | undefined): string | null {
-  const m = /^mode\.([a-z]+)/i.exec(id ?? "");
-  return m ? m[1].toLowerCase() : null;
+
+const sha256 = (data: crypto.BinaryLike) => crypto.createHash("sha256").update(data).digest("hex");
+
+/**
+ * Run the given extractors on one replay, parsing it once. Throws if the file
+ * can't be parsed at all; a sub-detector that throws is recorded in `errors` and
+ * the rest of the extraction is kept.
+ */
+export function extractGame(filePath: string, names: readonly ExtractorName[] = EXTRACTOR_NAMES): GameExtraction {
+  const bytes = fs.readFileSync(filePath);
+  const game = new SlippiGame(bytes);
+  const settings = game.getSettings();
+  if (!settings) throw new Error("No settings");
+  const out: GameExtraction = { fields: {}, versions: {}, errors: {}, events: {} };
+  const settingPlayers = settings.players ?? [];
+  const is1v1 = settingPlayers.length === 2;
+  const stageId = settings.stageId ?? -1;
+  const playerIndexes = settingPlayers.map((p) => p.playerIndex);
+
+  // Parsed pieces are shared between extractors and computed only when needed.
+  let stats: ReturnType<SlippiGame["getStats"]> | undefined;
+  const getStats = () => {
+    if (stats === undefined) stats = game.getStats();
+    if (!stats) throw new Error("No stats");
+    return stats;
+  };
+  const frames = () => game.getFrames();
+
+  const attempt = (extractor: ExtractorName, detector: string, run: () => void) => {
+    try {
+      run();
+    } catch {
+      // e.g. a frame without player data in a damaged file
+      (out.errors[extractor] ??= []).push(detector);
+    }
+  };
+
+  for (const name of names) {
+    if (name === "core") {
+      const { summary, conversions, deaths } = extractCore(game, getStats());
+      Object.assign(out.fields, summary);
+      out.events.core = { conversions, deaths };
+    } else if (name === "clipper") {
+      const ev: Record<string, unknown> = { combos: [], edgeguards: [], phantoms: [], earlyQuitOut: null };
+      if (is1v1) {
+        attempt("clipper", "combos", () => {
+          const rows: ComboRow[] = [];
+          for (const c of detectCombos(frames(), settings, DEFAULT_COMBO_TIMEOUT)) {
+            if (!c.moves.length) continue; // Clipper drops combos without a landed move
+            rows.push([
+              c.moves[0].playerIndex,
+              c.playerIndex,
+              c.startFrame,
+              c.endFrame ?? null,
+              round(c.startPercent),
+              c.endPercent == null ? null : round(c.endPercent),
+              c.didKill ? 1 : 0,
+              moveRows(c.moves),
+            ]);
+          }
+          ev.combos = rows;
+        });
+        const players = settingPlayers.map((p) => ({ playerIndex: p.playerIndex, characterId: p.characterId ?? -1 }));
+        attempt("clipper", "edgeguards", () => {
+          ev.edgeguards = findEdgeguards(frames(), getStats().stocks, players, stageId).map(
+            (eg): EdgeguardRow => [eg.victimIndex, eg.edgeguarderIndex, eg.startFrame, eg.endFrame, eg.metrics]
+          );
+        });
+        attempt("clipper", "phantoms", () => {
+          const bounds = frameBounds(frames());
+          if (!bounds) return;
+          ev.phantoms = detectPhantoms(frames(), playerIndexes, bounds.min, bounds.max).map(
+            (ph): PhantomRow => [ph.attackerIndex, ph.victimIndex, ph.metrics]
+          );
+        });
+        attempt("clipper", "earlyQuitOut", () => {
+          const q = findEarlyQuitOut(frames(), settings, game.getGameEnd(), game.getMetadata()?.lastFrame);
+          if (!q) return;
+          const row: EarlyQuitOutRow = [
+            q.combo.moves[0].playerIndex,
+            q.quitterIndex,
+            q.combo.startFrame,
+            q.gameLastFrame,
+            round(q.combo.startPercent),
+            round(q.victimPercent),
+            moveRows(q.combo.moves),
+          ];
+          ev.earlyQuitOut = row;
+        });
+      }
+      out.events.clipper = ev;
+    } else if (name === "identity") {
+      out.fields.contentHash = sha256(bytes);
+      out.fields.fingerprint = gameFingerprint(settings);
+      const gecko = game.getGeckoList();
+      out.fields.gecko = {
+        count: gecko?.codes.length ?? 0,
+        hash: gecko ? sha256(Buffer.from(gecko.contents)).slice(0, 16) : null,
+      };
+    } else if (name === "position") {
+      attempt("position", "position", () => {
+        const pos: PositionStats = positionStats(frames(), playerIndexes, stageId);
+        out.fields.position = pos;
+      });
+    } else if (name === "techLedge") {
+      attempt("techLedge", "techLedge", () => {
+        const events = techLedgeEvents(frames(), playerIndexes, stageId);
+        const counts: TechLedgeCounts = {};
+        for (const e of events) {
+          const key = `${e.kind}.${e.option}${e.direction ? `.${e.direction}` : ""}`;
+          const perPlayer = (counts[e.playerIndex] ??= {});
+          perPlayer[key] = (perPlayer[key] ?? 0) + 1;
+        }
+        out.fields.techLedge = counts;
+        out.events.techLedge = {
+          options: events.map((e): TechLedgeRow => [e.playerIndex, e.frame, e.kind, e.option, e.direction, e.percent]),
+        };
+      });
+    }
+    out.versions[name] = EXTRACTORS[name];
+  }
+  return out;
 }
 
-/** Full stats and events for one replay file. Throws if the file can't be parsed. */
-export function extractGameStats(filePath: string): { summary: GameStatsSummary; events: GameEvents } {
-  const game = new SlippiGame(filePath);
-  const settings = game.getSettings();
-  const stats = game.getStats();
+/** Same for every recording of one played game; see IdentitySummary.fingerprint. */
+export function gameFingerprint(settings: {
+  stageId?: number | null;
+  randomSeed?: number | null;
+  matchInfo?: Parameters<typeof readMatchInfo>[0];
+  players: { port?: number | null; characterId?: number | null; characterColor?: number | null; connectCode?: string | null; startStocks?: number | null }[];
+}): string {
+  const match = readMatchInfo(settings.matchInfo);
+  const players = [...settings.players]
+    .sort((a, b) => (a.port ?? 0) - (b.port ?? 0))
+    .map((p) => [p.port ?? null, p.characterId ?? null, p.characterColor ?? null, p.connectCode || null, p.startStocks ?? null]);
+  const key = JSON.stringify([settings.stageId ?? null, settings.randomSeed ?? null, match.id, match.gameNumber, match.tiebreaker, players]);
+  return sha256(key).slice(0, 32);
+}
+
+function extractCore(game: SlippiGame, stats: NonNullable<ReturnType<SlippiGame["getStats"]>>) {
+  const settings = game.getSettings()!;
   const end = game.getGameEnd();
   const meta = game.getMetadata();
-  if (!settings || !stats) throw new Error("No settings or stats");
-
   const settingPlayers = settings.players ?? [];
   const endMethod = end?.gameEndMethod ?? null;
   const lrasInitiator = end?.lrasInitiatorIndex ?? null;
@@ -290,56 +456,6 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
       ];
     });
 
-  // Clipper's detectors, on 1v1 games (their rules assume one opponent).
-  const events: GameEvents = { conversions, combos: [], deaths, edgeguards: [], phantoms: [] };
-  const detectorErrors: string[] = [];
-  const attempt = (name: string, run: () => void) => {
-    try {
-      run();
-    } catch {
-      detectorErrors.push(name); // e.g. a frame without player data in a damaged file
-    }
-  };
-  if (settingPlayers.length === 2) {
-    const frames = game.getFrames();
-    attempt("combos", () => {
-      const rows: ComboRow[] = [];
-      for (const c of detectCombos(frames, settings, DEFAULT_COMBO_TIMEOUT)) {
-        if (!c.moves.length) continue; // Clipper drops combos without a landed move
-        rows.push([
-          c.moves[0].playerIndex,
-          c.playerIndex,
-          c.startFrame,
-          c.endFrame ?? null,
-          round(c.startPercent),
-          c.endPercent == null ? null : round(c.endPercent),
-          c.didKill ? 1 : 0,
-          moveRows(c.moves),
-        ]);
-      }
-      events.combos = rows;
-    });
-    const players = settingPlayers.map((p) => ({ playerIndex: p.playerIndex, characterId: p.characterId ?? -1 }));
-    attempt("edgeguards", () => {
-      events.edgeguards = findEdgeguards(frames, stats.stocks, players, settings.stageId ?? -1).map((eg) => [
-        eg.victimIndex,
-        eg.edgeguarderIndex,
-        eg.startFrame,
-        eg.endFrame,
-        eg.metrics,
-      ]);
-    });
-    attempt("phantoms", () => {
-      const bounds = frameBounds(frames);
-      if (!bounds) return;
-      events.phantoms = detectPhantoms(frames, players.map((p) => p.playerIndex), bounds.min, bounds.max).map(
-        (ph) => [ph.attackerIndex, ph.victimIndex, ph.metrics]
-      );
-    });
-  }
-
-  const matchInfo = settings.matchInfo;
-  const matchId = matchInfo?.sessionId || matchInfo?.matchId || null;
   let rollbackFrames = 0;
   try {
     rollbackFrames = game.getRollbackFrames().count;
@@ -347,43 +463,34 @@ export function extractGameStats(filePath: string): { summary: GameStatsSummary;
     // Older files carry no rollback information.
   }
 
-  return {
-    summary: {
-      version: STATS_VERSION,
-      slpVersion: settings.slpVersion ?? null,
-      playedOn: meta?.playedOn ?? null,
-      consoleNick: meta?.consoleNick ?? null,
-      match: {
-        id: matchId,
-        mode: matchMode(matchId),
-        gameNumber: matchInfo?.gameNumber ?? null,
-        tiebreaker: matchInfo?.tiebreakerNumber ?? null,
-      },
-      rules: {
-        timerType: settings.timerType ?? null,
-        startingTimerSeconds: settings.startingTimerSeconds ?? null,
-        itemSpawnBehavior: settings.itemSpawnBehavior ?? null,
-        friendlyFire: settings.friendlyFireEnabled ?? null,
-        gameMode: settings.gameMode ?? null,
-        isPAL: settings.isPAL ?? null,
-        isFrozenPS: settings.isFrozenPS ?? null,
-      },
-      rollbackFrames,
-      placements: (end?.placements ?? []).map((pl) => ({ playerIndex: pl.playerIndex, position: pl.position ?? null })),
-      resultPolicy: RESULT_POLICY,
-      detectorErrors,
-      stageId: settings.stageId ?? null,
-      lastFrame,
-      gameComplete: !!stats.gameComplete,
-      endMethod,
-      lrasInitiator,
-      isTeams: !!settings.isTeams,
-      numPlayers: settingPlayers.length,
-      hasCpu: settingPlayers.some((p) => p.type === 1),
-      winner,
-      winMethod,
-      players,
+  const summary: CoreSummary = {
+    slpVersion: settings.slpVersion ?? null,
+    playedOn: meta?.playedOn ?? null,
+    consoleNick: meta?.consoleNick ?? null,
+    match: readMatchInfo(settings.matchInfo),
+    rules: {
+      timerType: settings.timerType ?? null,
+      startingTimerSeconds: settings.startingTimerSeconds ?? null,
+      itemSpawnBehavior: settings.itemSpawnBehavior ?? null,
+      friendlyFire: settings.friendlyFireEnabled ?? null,
+      gameMode: settings.gameMode ?? null,
+      isPAL: settings.isPAL ?? null,
+      isFrozenPS: settings.isFrozenPS ?? null,
     },
-    events,
+    rollbackFrames,
+    placements: (end?.placements ?? []).map((pl) => ({ playerIndex: pl.playerIndex, position: pl.position ?? null })),
+    resultPolicy: RESULT_POLICY,
+    stageId: settings.stageId ?? null,
+    lastFrame,
+    gameComplete: !!stats.gameComplete,
+    endMethod,
+    lrasInitiator,
+    isTeams: !!settings.isTeams,
+    numPlayers: settingPlayers.length,
+    hasCpu: settingPlayers.some((p) => p.type === 1),
+    winner,
+    winMethod,
+    players,
   };
+  return { summary, conversions, deaths };
 }

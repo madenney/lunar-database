@@ -1,5 +1,21 @@
 import path from "path";
-import { decideWinner, extractGameStats, matchMode, RESULT_POLICY, STATS_VERSION } from "./gameStats";
+import {
+  decideWinner,
+  extractGame,
+  gameFingerprint,
+  matchMode,
+  EXTRACTORS,
+  EXTRACTOR_NAMES,
+  RESULT_POLICY,
+  type ComboRow,
+  type ConversionRow,
+  type CoreSummary,
+  type DeathRow,
+  type EdgeguardRow,
+  type PhantomRow,
+  type TechLedgeRow,
+} from "./gameStats";
+import { readMatchInfo } from "./matchInfo";
 
 const P = (playerIndex: number, startStocks = 4) => ({ playerIndex, startStocks });
 const died = (playerIndex: number, n: number) =>
@@ -50,12 +66,31 @@ describe("matchMode", () => {
   });
 });
 
-describe("extractGameStats", () => {
-  const { summary, events } = extractGameStats(path.join(__dirname, "../__fixtures__/test.slp"));
-  const { conversions, combos, deaths, edgeguards, phantoms } = events;
+describe("extractGame", () => {
+  const FIXTURE = path.join(__dirname, "../__fixtures__/test.slp");
+  const x = extractGame(FIXTURE);
+  const summary = x.fields as unknown as CoreSummary;
+  const { conversions, deaths } = x.events.core as { conversions: ConversionRow[]; deaths: DeathRow[] };
+  const { combos, edgeguards, phantoms } = x.events.clipper as {
+    combos: ComboRow[];
+    edgeguards: EdgeguardRow[];
+    phantoms: PhantomRow[];
+  };
+
+  it("runs every extractor by default and records their versions", () => {
+    expect(x.versions).toEqual(EXTRACTORS);
+    expect(x.errors).toEqual({});
+  });
+
+  it("runs only the extractors asked for, and only their fields", () => {
+    const only = extractGame(FIXTURE, ["identity"]);
+    expect(only.versions).toEqual({ identity: EXTRACTORS.identity });
+    expect(Object.keys(only.fields).sort()).toEqual(["contentHash", "fingerprint", "gecko"]);
+    expect(only.fields.contentHash).toBe(x.fields.contentHash);
+    expect(only.events).toEqual({});
+  });
 
   it("summarises the game and keys players by port index", () => {
-    expect(summary.version).toBe(STATS_VERSION);
     expect(summary.resultPolicy).toBe(RESULT_POLICY);
     expect(summary.players.map((p) => p.playerIndex)).toEqual([0, 3]);
     expect(summary.winner === 0 || summary.winner === 3).toBe(true);
@@ -76,7 +111,6 @@ describe("extractGameStats", () => {
     expect(summary.rules).toHaveProperty("startingTimerSeconds");
     expect(summary.rollbackFrames).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(summary.placements)).toBe(true);
-    expect(summary.detectorErrors).toEqual([]);
   });
 
   it("emits conversion rows with their moves", () => {
@@ -118,5 +152,67 @@ describe("extractGameStats", () => {
       expect(metrics).toHaveProperty("score");
     }
     expect(Array.isArray(phantoms)).toBe(true);
+  });
+
+  it("identifies the recording and the played game", () => {
+    expect(x.fields.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(x.fields.fingerprint).toMatch(/^[0-9a-f]{32}$/);
+    expect(x.fields.gecko).toEqual(expect.objectContaining({ count: expect.any(Number) }));
+  });
+
+  it("measures where each player spends the game", () => {
+    const pos = x.fields.position as { players: { playerIndex: number; activeFrames: number; center: number | null }[]; avgDistance: number | null };
+    expect(pos.players.map((p) => p.playerIndex)).toEqual([0, 3]);
+    for (const p of pos.players) {
+      expect(p.activeFrames).toBeGreaterThan(0);
+      expect(p.activeFrames).toBeLessThanOrEqual(summary.lastFrame + 1);
+    }
+    expect(pos.avgDistance).toBeGreaterThan(0);
+  });
+
+  it("records tech, getup and ledge options with per-player counts", () => {
+    const { options } = x.events.techLedge as { options: TechLedgeRow[] };
+    const counts = x.fields.techLedge as Record<string, Record<string, number>>;
+    const total = Object.values(counts).reduce((n, c) => n + Object.values(c).reduce((a, b) => a + b, 0), 0);
+    expect(total).toBe(options.length);
+    for (const [player, , kind, , direction] of options) {
+      expect([0, 3]).toContain(player);
+      expect(["tech", "getup", "ledge"]).toContain(kind);
+      expect([null, "toward", "away"]).toContain(direction);
+    }
+  });
+});
+
+describe("gameFingerprint", () => {
+  const settings = {
+    stageId: 31,
+    randomSeed: 12345,
+    matchInfo: { sessionId: "mode.unranked-x", gameNumber: 2 },
+    players: [
+      { port: 2, characterId: 20, characterColor: 0, connectCode: "B#2", startStocks: 4 },
+      { port: 1, characterId: 2, characterColor: 1, connectCode: "A#1", startStocks: 4 },
+    ],
+  };
+
+  it("is the same for any recording of the game, whatever order players are listed", () => {
+    expect(gameFingerprint(settings)).toBe(gameFingerprint({ ...settings, players: [...settings.players].reverse() }));
+  });
+
+  it("differs for a different game", () => {
+    expect(gameFingerprint({ ...settings, randomSeed: 999 })).not.toBe(gameFingerprint(settings));
+    expect(gameFingerprint({ ...settings, matchInfo: { ...settings.matchInfo, gameNumber: 3 } })).not.toBe(gameFingerprint(settings));
+  });
+});
+
+describe("readMatchInfo", () => {
+  it("prefers sessionId, falls back to the deprecated matchId, and nulls missing fields", () => {
+    expect(readMatchInfo({ sessionId: "mode.ranked-x", matchId: "mode.old-y", gameNumber: 2, tiebreakerNumber: 0 })).toEqual({
+      id: "mode.ranked-x",
+      mode: "ranked",
+      gameNumber: 2,
+      tiebreaker: 0,
+    });
+    expect(readMatchInfo({ matchId: "mode.unranked-y" })).toMatchObject({ id: "mode.unranked-y", mode: "unranked" });
+    expect(readMatchInfo(undefined)).toEqual({ id: null, mode: null, gameNumber: null, tiebreaker: null });
   });
 });

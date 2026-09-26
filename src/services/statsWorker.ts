@@ -2,12 +2,12 @@ import { parentPort, threadId } from "worker_threads";
 import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
-import { extractGameStats } from "./gameStats";
+import { extractGame, type ExtractorName } from "./gameStats";
 
 // Parses replays for scripts/extractStats.ts. Prefers the .slpz copy (about 9x less
 // disk reading), decompressed into RAM, and falls back to the raw .slp.
 type Job = { id: string; filePath: string };
-type Msg = { jobs: Job[]; slpRoot: string; slpzRoot: string; slpzBinary: string };
+type Msg = { jobs: Job[]; extractors: ExtractorName[]; slpRoot: string; slpzRoot: string; slpzBinary: string };
 
 const TMP = path.join(fs.existsSync("/dev/shm") ? "/dev/shm" : "/tmp", `lm-stats-${process.pid}-${threadId}.slp`);
 
@@ -21,8 +21,7 @@ parentPort!.on("message", (msg: Msg) => {
         execFileSync(msg.slpzBinary, ["-q", "-d", "-o", TMP, slpz], { timeout: 60_000 });
         file = TMP;
       }
-      const out = extractGameStats(file);
-      return { id: job.id, ...out };
+      return { id: job.id, extraction: extractGame(file, msg.extractors) };
     } catch (err) {
       return { id: job.id, error: String((err as Error).message).slice(0, 200) };
     } finally {
