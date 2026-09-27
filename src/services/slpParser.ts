@@ -3,10 +3,26 @@ import { stages, characters } from "@slippi/slippi-js";
 import { IReplayPlayer } from "../models/Replay";
 import { readMatchInfo } from "./matchInfo";
 
+/** Slippi replays exist from 2018; a console with a wrong clock can say 1982 or 2034. */
+export const EARLIEST_REPLAY_DATE = new Date("2018-01-01T00:00:00Z");
+
+/**
+ * A replay's recorded start time if it's possible (from 2018 up to a day past
+ * `now`), else null. Recording devices with wrong clocks produce the rest.
+ */
+export function plausibleStartAt(d: Date | null, now = new Date()): Date | null {
+  if (!d || isNaN(d.getTime())) return null;
+  if (d < EARLIEST_REPLAY_DATE || d.getTime() > now.getTime() + 24 * 3600 * 1000) return null;
+  return d;
+}
+
 export interface ParsedReplay {
   stageId: number | null;
   stageName: string | null;
+  /** When the game was played; null when unknown or the recorded date is impossible. */
   startAt: Date | null;
+  /** The recorded date when it was impossible (and so not used as startAt). */
+  startAtRaw: Date | null;
   duration: number | null;
   players: IReplayPlayer[];
   winner: number | null;
@@ -54,11 +70,13 @@ export function parseSlpFile(filePath: string): ParsedReplay {
     };
   });
 
-  let startAt: Date | null = null;
+  let recorded: Date | null = null;
   if (metadata?.startAt) {
     const d = new Date(metadata.startAt);
-    if (!isNaN(d.getTime())) startAt = d;
+    if (!isNaN(d.getTime())) recorded = d;
   }
+  const startAt = plausibleStartAt(recorded);
+  const startAtRaw = recorded && !startAt ? recorded : null;
 
   const duration = metadata?.lastFrame ?? null;
 
@@ -68,6 +86,7 @@ export function parseSlpFile(filePath: string): ParsedReplay {
     stageId,
     stageName,
     startAt,
+    startAtRaw,
     duration,
     players,
     winner: null,

@@ -14,6 +14,7 @@
     "crawl": "ts-node src/scripts/crawl.ts",
     "backfill-match-info": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/backfillMatchInfo.ts",
     "build-player-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/buildPlayerStats.ts",
+    "fix-impossible-dates": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/fixImpossibleDates.ts",
     "register-full-db": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/registerFullDbBundle.ts",
     "crawl:monitor": "ts-node src/scripts/crawlMonitor.ts",
     "test": "jest --forceExit --detectOpenHandles",

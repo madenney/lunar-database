@@ -1,5 +1,5 @@
 import path from "path";
-import { parseSlpFile } from "./slpParser";
+import { parseSlpFile, plausibleStartAt } from "./slpParser";
 import { matchMode } from "./matchInfo";
 
 const FIXTURE = path.join(__dirname, "../__fixtures__/test.slp");
@@ -72,5 +72,19 @@ describe("slpParser", () => {
 
   it("throws on a non-existent file", () => {
     expect(() => parseSlpFile("/tmp/does-not-exist.slp")).toThrow();
+  });
+});
+
+describe("plausibleStartAt", () => {
+  const now = new Date("2026-09-26T00:00:00Z");
+  it("keeps dates from 2018 up to a day past now", () => {
+    expect(plausibleStartAt(new Date("2020-05-01"), now)).toEqual(new Date("2020-05-01"));
+    expect(plausibleStartAt(new Date("2026-09-26T20:00:00Z"), now)).not.toBeNull();
+  });
+  it("drops dates from wrong console clocks", () => {
+    expect(plausibleStartAt(new Date("1982-01-01"), now)).toBeNull();
+    expect(plausibleStartAt(new Date("2013-06-01"), now)).toBeNull();
+    expect(plausibleStartAt(new Date("2034-02-08"), now)).toBeNull();
+    expect(plausibleStartAt(null, now)).toBeNull();
   });
 });

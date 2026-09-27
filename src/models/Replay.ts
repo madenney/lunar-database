@@ -63,7 +63,8 @@ export interface IReplay extends Document {
   fileSize: number | null; // bytes
   stageId: number | null;
   stageName: string | null;
-  startAt: Date | null;
+  startAt: Date | null; // null when unknown or the recorded date is impossible
+  startAtRaw: Date | null; // the impossible recorded date, kept for reference
   duration: number | null; // frames
   players: IReplayPlayer[];
   winner: number | null; // playerIndex of winner, null if inconclusive
@@ -98,6 +99,7 @@ const ReplaySchema = new Schema<IReplay>({
   stageId: { type: Number, default: null },
   stageName: { type: String, default: null },
   startAt: { type: Date, default: null },
+  startAtRaw: { type: Date, default: null },
   duration: { type: Number, default: null },
   players: { type: [PlayerSchema], default: [] },
   winner: { type: Number, default: null },
