@@ -13,6 +13,12 @@ import referenceRoutes from "./reference";
 import submissionsRoutes from "./submissions";
 import playersRoutes from "./players";
 import { Player } from "../models/Player";
+import { GameStats } from "../models/GameStats";
+import { clearGameDetailCache, detailFile } from "../services/gameDetail";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import zlib from "zlib";
 
 let app: express.Express;
 let server: http.Server;
@@ -315,6 +321,77 @@ describe("selection consistency", () => {
     expect(foxVsFox.body.pagination.total).toBe(1); // only the doubles game has two Foxes
     const foxVsMarth = await get("/api/replays?p1CharacterId=2&p2CharacterId=9");
     expect(foxVsMarth.body.pagination.total).toBe(2); // slots 2/3 count too
+  });
+});
+
+describe("extracted stats", () => {
+  let detailDir: string;
+  beforeEach(() => {
+    detailDir = fs.mkdtempSync(path.join(os.tmpdir(), "lm-detail-"));
+    config.statsDetailDir = detailDir;
+    clearGameDetailCache();
+  });
+  afterEach(async () => {
+    fs.rmSync(detailDir, { recursive: true, force: true });
+    config.statsDetailDir = "";
+    await GameStats.deleteMany({});
+  });
+
+  async function extracted(replayId: mongoose.Types.ObjectId) {
+    await GameStats.collection.insertOne({
+      replayId,
+      filePath: "secret/path.slp",
+      contentHash: "c".repeat(64),
+      extractors: { core: 2, clipper: 1 },
+      shards: { core: "main-aaa", clipper: "main-aaa" },
+      error: null,
+      winner: 0,
+      winMethod: "stocks",
+      lastFrame: 7200,
+      players: [
+        { playerIndex: 0, characterColor: 2, startStocks: 4, stocksLost: 1, kills: 4, openings: 20, damageDealt: 400, neutralWins: 12, inputsPerMinute: 300, actions: { wavedashCount: 9 } },
+        { playerIndex: 1, characterColor: 0, startStocks: 4, stocksLost: 4, kills: 1, openings: 15, damageDealt: 300, neutralWins: 9, inputsPerMinute: 250 },
+      ],
+    });
+    const write = (e: string, v: number, events: object) => {
+      const file = detailFile(detailDir, e, v, "main-aaa");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, zlib.gzipSync(JSON.stringify({ r: String(replayId), ...events }) + "\n"));
+    };
+    write("core", 2, { conversions: [], deaths: [[1, 900, 120, 3, 0, 17, 60]] });
+    write("clipper", 1, { combos: [[0, 1, 100, 200, 0, 80, 1, [[17, 150, 12, 1]]]], edgeguards: [], phantoms: [], earlyQuitOut: null });
+  }
+
+  it("adds compact stats to search results, null for games not yet extracted", async () => {
+    const players = [{ playerIndex: 0, characterId: 2 }, { playerIndex: 1, characterId: 9 }];
+    const a = await Replay.create({ filePath: "/test/a.slp", fileHash: "a", stageId: 31, duration: 7200, players });
+    await Replay.create({ filePath: "/test/b.slp", fileHash: "b", stageId: 8, duration: 7200, players });
+    await extracted(a._id as mongoose.Types.ObjectId);
+
+    const { body } = await get("/api/replays");
+    const byId = Object.fromEntries(body.replays.map((r: any) => [r._id, r.stats]));
+    expect(byId[String(a._id)]).toMatchObject({ winner: 0, winMethod: "stocks", lastFrame: 7200 });
+    expect(byId[String(a._id)].players[0]).toEqual({
+      playerIndex: 0, characterColor: 2, startStocks: 4, stocksLost: 1, kills: 4, openings: 20, damageDealt: 400, neutralWins: 12, inputsPerMinute: 300,
+    });
+    expect(Object.values(byId).filter((v) => v === null)).toHaveLength(1);
+  });
+
+  it("returns one game's summary and events, without internal fields", async () => {
+    const replayId = new mongoose.Types.ObjectId();
+    await extracted(replayId);
+    const { status, body } = await get(`/api/replays/${replayId}/stats`);
+    expect(status).toBe(200);
+    expect(body.summary).toMatchObject({ winner: 0, extractors: { core: 2, clipper: 1 } });
+    expect(body.summary.players[0].actions).toEqual({ wavedashCount: 9 });
+    for (const hidden of ["filePath", "contentHash", "shards", "_id"]) expect(body.summary).not.toHaveProperty(hidden);
+    expect(body.events.core.deaths).toEqual([[1, 900, 120, 3, 0, 17, 60]]);
+    expect(body.events.clipper.combos).toHaveLength(1);
+  });
+
+  it("404s for games without stats and for malformed ids", async () => {
+    expect((await get(`/api/replays/${new mongoose.Types.ObjectId()}/stats`)).status).toBe(404);
+    expect((await get(`/api/replays/not-an-id/stats`)).status).toBe(404);
   });
 });
 

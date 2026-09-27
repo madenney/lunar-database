@@ -49,6 +49,10 @@ export const config = {
   jobReaperIntervalMinutes: parseInt(process.env.JOB_REAPER_INTERVAL_MINUTES || "15", 10),
   jobStuckAfterMinutes: parseInt(process.env.JOB_STUCK_AFTER_MINUTES || "960", 10),
   slpzBinary: process.env.SLPZ_BINARY || "/usr/local/bin/slpz",
+
+  // Per-game event files written by the stats extraction (scripts/extractStats.ts
+  // --detail-dir). Read by GET /api/replays/:id/stats; empty = events unavailable.
+  statsDetailDir: process.env.STATS_DETAIL_DIR || "",
   /** Shared secret identifying the website (see middleware/serviceCaller.ts).
    *  Empty = no website trust: rate limits key on the connecting IP and any
    *  caller's X-Client-Id is accepted, as before. */

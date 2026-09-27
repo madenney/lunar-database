@@ -188,6 +188,28 @@ Get full details for a single replay. `filePath` is excluded.
 
 ---
 
+### Get Replay Stats
+
+```
+GET /api/replays/:id/stats
+```
+
+Everything the stats extraction recorded for one game. Search results also carry a compact `stats` object per replay (`winner`, `winMethod`, `endMethod`, `lastFrame`, `gameComplete`, and per player `playerIndex`, `characterColor`, `startStocks`, `stocksLost`, `kills`, `openings`, `damageDealt`, `neutralWins`, `inputsPerMinute`), or `null` for a game not yet extracted.
+
+**Response** `200`
+
+| Field | Type | Description |
+|---|---|---|
+| `summary` | object | Extracted fields by extractor: `core` (match info, rules, result, `players` with per-player stats), `identity` (`fingerprint`, `gecko`), `position`, `techLedge` counts, plus `extractors` (name → version). |
+| `events` | object | Per extractor: `core` `{conversions, deaths}`, `clipper` `{combos, edgeguards, phantoms, earlyQuitOut}`, `techLedge` `{options}`. Row layouts are documented in `src/services/gameStats.ts`. An extractor whose file can't be read is `null`. |
+| `extractorErrors` | object | Extractor → sub-detectors that failed on this file (their events are missing, not empty). |
+
+**Response** `404` — `{ "error": "No stats for this replay yet" }` (also for malformed ids).
+
+Rate limit: 60 requests per minute.
+
+---
+
 ### Record Replay View
 
 ```

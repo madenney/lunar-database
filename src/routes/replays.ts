@@ -2,6 +2,8 @@ import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { Replay } from "../models/Replay";
+import { GameStats } from "../models/GameStats";
+import { loadGameEvents } from "../services/gameDetail";
 import { resolveSelection, ReplaySearchParams } from "../services/replaySearchQuery";
 import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
 import { sendApiError } from "../utils/apiErrors";
@@ -14,6 +16,46 @@ import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { sanitizeFilters } from "../utils/sanitizeFilters";
 
 const router = Router();
+
+/** Per-player fields of the compact stats attached to search results. */
+const ROW_PLAYER_FIELDS = [
+  "playerIndex",
+  "characterColor",
+  "startStocks",
+  "stocksLost",
+  "kills",
+  "openings",
+  "damageDealt",
+  "neutralWins",
+  "inputsPerMinute",
+] as const;
+
+/**
+ * Compact extracted stats for a page of results, keyed by replay ID: the result
+ * and a few headline numbers per player. Replays not yet extracted are absent.
+ */
+async function rowStats(ids: unknown[]): Promise<Map<string, Record<string, unknown>>> {
+  // (`error` is also a Document method name, so the filter is typed loosely.)
+  const filter: Record<string, unknown> = { replayId: { $in: ids }, "extractors.core": { $exists: true }, error: null };
+  const docs = await GameStats.find(filter)
+    .select({ replayId: 1, winner: 1, winMethod: 1, endMethod: 1, lastFrame: 1, gameComplete: 1, players: 1 })
+    .maxTimeMS(5000)
+    .lean();
+  const out = new Map<string, Record<string, unknown>>();
+  for (const d of docs) {
+    out.set(String(d.replayId), {
+      winner: d.winner ?? null,
+      winMethod: d.winMethod ?? null,
+      endMethod: d.endMethod ?? null,
+      lastFrame: d.lastFrame ?? null,
+      gameComplete: d.gameComplete ?? null,
+      players: (d.players ?? []).map((p) =>
+        Object.fromEntries(ROW_PLAYER_FIELDS.map((k) => [k, (p as unknown as Record<string, unknown>)[k] ?? null]))
+      ),
+    });
+  }
+  return out;
+}
 
 const searchLimiter = createRateLimiter({
   windowMs: 60 * 1000,
@@ -107,6 +149,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
       Replay.countDocuments(finalQuery).maxTimeMS(10000),
     ]);
 
+    // Extracted stats are an enhancement: a slow or failed lookup never fails the search.
+    const stats = await rowStats(replays.map((r) => r._id)).catch(() => new Map<string, Record<string, unknown>>());
+    const withStats = replays.map((r) => ({ ...r, stats: stats.get(String(r._id)) ?? null }));
+
     const clientId = req.headers["x-client-id"] as string | undefined;
     SearchEvent.create({
       type: "search",
@@ -118,7 +164,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     }).catch(() => {});
 
     res.json({
-      replays,
+      replays: withStats,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -146,6 +192,37 @@ router.get("/:id", replayGetLimiter, async (req: Request, res: Response) => {
       return;
     }
     res.json(replay);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+const statsLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
+// GET /api/replays/:id/stats — everything extracted for one game: the summary
+// (context, result, per-player stats, position, tech/ledge counts) and its events
+// (conversions, deaths, combos, edgeguards, phantoms, quit-outs, tech/ledge options).
+router.get("/:id/stats", statsLimiter, async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!/^[0-9a-f]{24}$/i.test(id)) {
+      res.status(404).json({ error: "Replay not found" });
+      return;
+    }
+    const stats = await GameStats.findOne({ replayId: id })
+      .select({ filePath: 0, _id: 0, __v: 0, contentHash: 0 })
+      .lean();
+    if (!stats || stats.error) {
+      res.status(404).json({ error: "No stats for this replay yet" });
+      return;
+    }
+    const events = loadGameEvents(stats);
+    const { shards: _shards, extractorErrors, ...summary } = stats;
+    res.json({ summary, events, extractorErrors: extractorErrors ?? {} });
   } catch (err) {
     sendError(res, err);
   }
