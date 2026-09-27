@@ -18,7 +18,9 @@ export interface TournamentRef {
   startggSlug?: string | null;
 }
 
-type SeriesRule = { level?: number; match?: string; rename?: [string, string] };
+/** level: folder depth of the event; match: event folder pattern; rename: [pattern, replacement];
+ *  prefix: false when the top folder is a collection name, not part of event names. */
+type SeriesRule = { level?: number; match?: string; rename?: [string, string]; prefix?: boolean };
 const SERIES = seriesConfig.series as unknown as Record<string, SeriesRule>;
 const UNLISTED = new Set(seriesConfig.unlisted.map((s) => s.toLowerCase()));
 
@@ -57,7 +59,7 @@ export function tournamentFromPath(filePath: string): TournamentRef | null {
     const renamed = event.replace(new RegExp(rule.rename[0], "i"), rule.rename[1]);
     if (renamed !== event) return { key: slugify(renamed), name: renamed, listed: true };
   }
-  const name = event.toLowerCase().includes(top.toLowerCase()) ? event : `${top} ${event}`;
+  const name = rule.prefix === false || event.toLowerCase().includes(top.toLowerCase()) ? event : `${top} ${event}`;
   return { key: slugify(name), name, listed: true };
 }
 

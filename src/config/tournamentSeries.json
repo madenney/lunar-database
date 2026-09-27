@@ -1,8 +1,9 @@
 {
-  "_comment": "How archive folders under tournament/ map to tournaments (services/tournaments.ts). By default a top-level folder is one tournament. A series folder holds many events: 'level' is the path depth of the event folder (1 = the series folder itself, 2 = its children, ...); 'match' instead picks the first folder whose name matches the regex. 'unlisted' folders get no tournament page. Games whose set carries start.gg or Jungle metadata are grouped by that instead. Edit and re-run npm run build-tournaments. 'rename' [regex, replacement] names an event folder (e.g. kotj_7 -> KOTJ #7) so it matches the event's set metadata.",
+  "_comment": "How archive folders under tournament/ map to tournaments (services/tournaments.ts). By default a top-level folder is one tournament. A series folder holds many events: 'level' is the path depth of the event folder (1 = the series folder itself, 2 = its children, ...); 'match' instead picks the first folder whose name matches the regex. 'unlisted' folders get no tournament page. Games whose set carries start.gg or Jungle metadata are grouped by that instead. Edit and re-run npm run build-tournaments. 'rename' [regex, replacement] names an event folder (e.g. kotj_7 -> KOTJ #7) so it matches the event's set metadata. 'prefix': false keeps a collection folder's name (e.g. CR-Slippi-Replays) out of its events' names.",
   "series": {
     "CR-Slippi-Replays": {
-      "level": 2
+      "level": 2,
+      "prefix": false
     },
     "Nightclub Season 1": {
       "level": 2

@@ -11,6 +11,7 @@ describe("tournamentFromPath", () => {
     expect(tournamentFromPath("tournament/Da Greenhouse/Da Greenhouse #60 1-10-2025/x/g.slp")?.name).toBe("Da Greenhouse #60 1-10-2025");
     expect(tournamentFromPath("tournament/The Local/Season 2/The Local 2x07/6/g.slp")?.name).toBe("The Local 2x07");
     expect(tournamentFromPath("tournament/The Local/6x02/g.slp")?.name).toBe("The Local 6x02");
+    expect(tournamentFromPath("tournament/CR-Slippi-Replays/CR Clash 117 9-26-2024/g.slp")?.name).toBe("CR Clash 117 9-26-2024");
   });
   it("marks non-tournament folders unlisted and ignores other sources", () => {
     expect(tournamentFromPath("tournament/Friendlies/d_haus/g.slp")?.listed).toBe(false);
