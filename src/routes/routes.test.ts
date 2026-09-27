@@ -12,6 +12,9 @@ import statsRoutes, { clearStatsCache } from "./stats";
 import referenceRoutes from "./reference";
 import submissionsRoutes from "./submissions";
 import playersRoutes from "./players";
+import tournamentRoutes, { setsRouter } from "./tournaments";
+import { Tournament } from "../models/Tournament";
+import { TournamentSet } from "../models/TournamentSet";
 import { Player } from "../models/Player";
 import { GameStats } from "../models/GameStats";
 import { PlayerStats } from "../models/PlayerStats";
@@ -36,6 +39,8 @@ beforeAll(async () => {
   app.use("/api/reference", referenceRoutes);
   app.use("/api/submissions", submissionsRoutes);
   app.use("/api/players", playersRoutes);
+  app.use("/api/tournaments", tournamentRoutes);
+  app.use("/api/sets", setsRouter);
 
   server = await new Promise<http.Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -439,6 +444,59 @@ describe("GET /api/players/:code/profile", () => {
   it("404s for unknown and malformed codes", async () => {
     expect((await get("/api/players/NOPE%231/profile")).status).toBe(404);
     expect((await get("/api/players/not-a-code/profile")).status).toBe(404);
+  });
+});
+
+describe("tournaments and sets", () => {
+  afterEach(async () => {
+    await Tournament.deleteMany({});
+    await TournamentSet.deleteMany({});
+  });
+
+  async function seed() {
+    const now = new Date();
+    await Tournament.collection.insertMany([
+      { _id: "kotj-7", name: "KOTJ #7", listed: true, games: 20, sets: 2, lastAt: new Date("2026-09-22"), players: [], characters: [], stages: [], builtAt: now } as any,
+      { _id: "midlane-melee-177", name: "Midlane Melee 177", listed: true, games: 90, sets: 30, lastAt: new Date("2025-06-05"), players: [], characters: [], stages: [], builtAt: now } as any,
+      { _id: "friendlies", name: "Friendlies", listed: false, games: 5, sets: 0, lastAt: null, players: [], characters: [], stages: [], builtAt: now } as any,
+    ]);
+    await TournamentSet.collection.insertOne({
+      _id: "dir-0123456789abcdef0123", source: "jungle", tournamentKey: "kotj-7", tournament: { key: "kotj-7", name: "KOTJ #7", listed: true },
+      round: "Grand Finals", players: [{ name: "Goober" }, { name: "OBZDN" }], winner: 1, games: [], dir: "tournament/King of the Jungle/kotj_7/24-grand-finals", builtAt: now,
+    } as any);
+  }
+
+  it("lists listed tournaments, newest first, with search", async () => {
+    await seed();
+    const { body } = await get("/api/tournaments");
+    expect(body.tournaments.map((t: any) => t._id)).toEqual(["kotj-7", "midlane-melee-177"]);
+    expect((await get("/api/tournaments?q=midlane")).body.tournaments.map((t: any) => t._id)).toEqual(["midlane-melee-177"]);
+    expect((await get("/api/tournaments?sort=games")).body.tournaments[0]._id).toBe("midlane-melee-177");
+  });
+
+  it("returns a tournament with its sets, never the archive folder", async () => {
+    await seed();
+    const { status, body } = await get("/api/tournaments/kotj-7");
+    expect(status).toBe(200);
+    expect(body.tournament.name).toBe("KOTJ #7");
+    expect(body.sets).toHaveLength(1);
+    expect(body.sets[0]).toMatchObject({ round: "Grand Finals", winner: 1 });
+    expect(body.sets[0]).not.toHaveProperty("dir");
+    const set = await get("/api/sets/dir-0123456789abcdef0123");
+    expect(set.status).toBe(200);
+    expect(set.body).not.toHaveProperty("dir");
+    expect((await get("/api/tournaments/nope")).status).toBe(404);
+    expect((await get("/api/tournaments/friendlies")).status).toBe(404);
+    expect((await get("/api/sets/not-a-set")).status).toBe(404);
+  });
+
+  it("filters replay search to one tournament", async () => {
+    const players = [{ playerIndex: 0, characterId: 2 }, { playerIndex: 1, characterId: 9 }];
+    await Replay.create({ filePath: "/t/a.slp", fileHash: "a", stageId: 31, duration: 7200, players, tournamentKey: "kotj-7" });
+    await Replay.create({ filePath: "/t/b.slp", fileHash: "b", stageId: 31, duration: 7200, players, tournamentKey: "other" });
+    const { body } = await get("/api/replays?tournament=kotj-7");
+    expect(body.replays).toHaveLength(1);
+    expect(body.pagination.total).toBe(1);
   });
 });
 

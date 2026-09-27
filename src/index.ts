@@ -21,6 +21,7 @@ import replayRoutes from "./routes/replays";
 import jobRoutes from "./routes/jobs";
 import statsRoutes from "./routes/stats";
 import playersRoutes from "./routes/players";
+import tournamentRoutes, { setsRouter } from "./routes/tournaments";
 import referenceRoutes from "./routes/reference";
 import submissionsRoutes from "./routes/submissions";
 import adminRoutes from "./routes/admin";
@@ -149,6 +150,8 @@ async function main() {
   app.use("/api/jobs", jobRoutes);
   app.use("/api/stats", statsRoutes);
   app.use("/api/players", playersRoutes);
+  app.use("/api/tournaments", tournamentRoutes);
+  app.use("/api/sets", setsRouter);
   app.use("/api/reference", referenceRoutes);
   app.use("/api/submissions", submissionsRoutes);
   app.use("/api/admin", adminRoutes);

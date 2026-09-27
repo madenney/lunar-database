@@ -73,6 +73,10 @@ export interface IReplay extends Document {
   gameNumber: number | null;
   tiebreaker: number | null;
   mode: string | null; // "ranked" | "unranked" | "direct" | "teams"…
+  // Tournament grouping (scripts/buildSets.ts, buildTournaments.ts); null outside tournaments.
+  tournamentKey: string | null;
+  setId: string | null;
+  setGame: number | null;
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
@@ -107,6 +111,9 @@ const ReplaySchema = new Schema<IReplay>({
   gameNumber: { type: Number, default: null },
   tiebreaker: { type: Number, default: null },
   mode: { type: String, default: null },
+  tournamentKey: { type: String, default: null },
+  setId: { type: String, default: null },
+  setGame: { type: Number, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
   usable: { type: Boolean, default: null },
@@ -145,6 +152,8 @@ ReplaySchema.index({ source: 1 });
 // Groups the games of an online set. Partial: only replays that carry a match ID
 // are indexed, so older files cost nothing.
 ReplaySchema.index({ matchId: 1, gameNumber: 1 }, { partialFilterExpression: { matchId: { $type: "string" } } });
+ReplaySchema.index({ tournamentKey: 1, startAt: -1 }, { partialFilterExpression: { tournamentKey: { $type: "string" } } });
+ReplaySchema.index({ setId: 1 }, { partialFilterExpression: { setId: { $type: "string" } } });
 // Serves the common estimate/search shape: match on source + usable, then sum
 // fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
 // (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.

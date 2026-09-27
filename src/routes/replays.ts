@@ -141,7 +141,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
 
     // Same selection as estimate, job creation and the bundle worker, including
     // how ascending date order treats undated replays.
-    const { query: finalQuery, sortObj } = await resolveSelection({ ...params, sort: sort as string | undefined });
+    const { query: selection, sortObj } = await resolveSelection({ ...params, sort: sort as string | undefined });
+    // Games of one tournament (tournament pages).
+    const tournament = typeof req.query.tournament === "string" ? req.query.tournament.toLowerCase() : "";
+    const finalQuery = /^[a-z0-9-]{1,80}$/.test(tournament) ? { $and: [selection, { tournamentKey: tournament }] } : selection;
 
     const rawPage = parseInt(page as string, 10);
     const rawLimit = parseInt(limit as string, 10);

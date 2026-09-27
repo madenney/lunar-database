@@ -16,6 +16,7 @@ All responses are JSON. Errors return `{ "error": "message" }`; errors with a ma
 - [Estimates](#estimates)
 - [Download Jobs](#download-jobs)
 - [Players](#players)
+- [Tournaments and Sets](#tournaments-and-sets)
 - [Stats](#stats)
 - [Reference Data](#reference-data)
 - [Health Check](#health-check)
@@ -728,6 +729,63 @@ Search players by connect code or display name. Same as autocomplete but with hi
 **Response** `200` — Same format as [Autocomplete](#autocomplete-players).
 
 **Response** `400` — Query shorter than 2 or longer than 100 characters.
+
+---
+
+## Tournaments and Sets
+
+Built offline by `npm run build-sets` (set metadata shipped with tournament
+replays: start.gg export `context.json`, Jungle `set.json`) and
+`npm run build-tournaments` (groups `source: "tournament"` replays by event, using
+`src/config/tournamentSeries.json`). Only tournament-published names appear; no
+archive paths, Slippi user IDs or connect-code links.
+
+### List Tournaments
+
+```
+GET /api/tournaments
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `q` | string | No | Name search. |
+| `page` | number | No | Default `1`. |
+| `limit` | number | No | Default `50`, max `100`. |
+| `sort` | string | No | `recent` (default, by last game) or `games`. |
+
+**Response** `200` — `{ tournaments: Tournament[], pagination: { page, total, pages } }`.
+Listed tournaments only (catch-alls like "Friendlies" are unlisted).
+
+### Get Tournament
+
+```
+GET /api/tournaments/:key
+```
+
+`key` is a lowercase slug, e.g. `kotj-7`. `?sets=0` omits the sets.
+
+**Response** `200` — `{ tournament, sets }`. `tournament`: `_id`, `name`, `location`,
+`startggSlug`, `firstAt`, `lastAt`, `games`, `sets`, `players[{name, games}]`,
+`characters[{characterId, games}]`, `stages[{stageId, games}]`. `sets` are in play
+order (see Get Set).
+
+**Response** `404` — Unknown or unlisted tournament.
+
+### Get Set
+
+```
+GET /api/sets/:id
+```
+
+`id` is `sgg-<start.gg set id>` or `dir-<20 hex>`.
+
+**Response** `200` — `_id`, `source` (`startgg-export` | `jungle`), `tournamentKey`,
+`tournament`, `event`, `round`, `bestOf`, `location`, `startgg { setId, eventId,
+eventSlug }`, `players[{name, prefix, port, score}]`, `winner` (player index),
+`games[{replayId, n, winner}]`, `startAt`.
+
+Search Replays also accepts `tournament=<key>`, and replays carry `tournamentKey`,
+`setId` and `setGame` when known.
 
 ---
 

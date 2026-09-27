@@ -1,0 +1,46 @@
+{
+  "_comment": "How archive folders under tournament/ map to tournaments (services/tournaments.ts). By default a top-level folder is one tournament. A series folder holds many events: 'level' is the path depth of the event folder (1 = the series folder itself, 2 = its children, ...); 'match' instead picks the first folder whose name matches the regex. 'unlisted' folders get no tournament page. Games whose set carries start.gg or Jungle metadata are grouped by that instead. Edit and re-run npm run build-tournaments. 'rename' [regex, replacement] names an event folder (e.g. kotj_7 -> KOTJ #7) so it matches the event's set metadata.",
+  "series": {
+    "CR-Slippi-Replays": {
+      "level": 2
+    },
+    "Nightclub Season 1": {
+      "level": 2
+    },
+    "Half Moon": {
+      "level": 2
+    },
+    "Purdue Weeklies - Spring 2020": {
+      "level": 2
+    },
+    "Purdue Weeklies - Fall 2019": {
+      "level": 2
+    },
+    "TMT": {
+      "level": 2
+    },
+    "King of the Jungle": {
+      "level": 2,
+      "rename": [
+        "^kotj_(\\d+)$",
+        "KOTJ #$1"
+      ]
+    },
+    "Da Greenhouse": {
+      "level": 2
+    },
+    "Gourmet Clash": {
+      "level": 2
+    },
+    "Wii the North": {
+      "level": 2
+    },
+    "The Local": {
+      "match": "\\d+x\\d+"
+    }
+  },
+  "unlisted": [
+    "Friendlies",
+    "unknown"
+  ]
+}
