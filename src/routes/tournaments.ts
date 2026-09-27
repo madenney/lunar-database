@@ -24,7 +24,14 @@ router.get("/", limiter, async (req: Request, res: Response) => {
     const page = Math.max(1, Math.min(Number(req.query.page) || 1, 1000));
     const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 100));
     const filter: Record<string, unknown> = { listed: true };
-    if (q) filter.name = { $regex: escapeRegex(q), $options: "i" };
+    // Every word must appear, ignoring punctuation: "kotj 7" finds "KOTJ #7". Numbers
+    // match whole, so "7" doesn't find "#17" or "2017".
+    const words = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 8);
+    if (words.length) {
+      filter.$and = words.map((w) => ({
+        name: { $regex: /^\d+$/.test(w) ? `(^|\\D)${w}(\\D|$)` : escapeRegex(w), $options: "i" },
+      }));
+    }
     const sort: Record<string, 1 | -1> = req.query.sort === "games" ? { games: -1 } : { lastAt: -1, games: -1 };
     const [tournaments, total] = await Promise.all([
       Tournament.find(filter)

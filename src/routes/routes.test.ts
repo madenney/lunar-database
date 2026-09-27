@@ -471,6 +471,9 @@ describe("tournaments and sets", () => {
     const { body } = await get("/api/tournaments");
     expect(body.tournaments.map((t: any) => t._id)).toEqual(["kotj-7", "midlane-melee-177"]);
     expect((await get("/api/tournaments?q=midlane")).body.tournaments.map((t: any) => t._id)).toEqual(["midlane-melee-177"]);
+    // Word-by-word, punctuation-blind, whole numbers.
+    expect((await get("/api/tournaments?q=kotj%207")).body.tournaments.map((t: any) => t._id)).toEqual(["kotj-7"]);
+    expect((await get("/api/tournaments?q=melee%2017")).body.tournaments).toHaveLength(0);
     expect((await get("/api/tournaments?sort=games")).body.tournaments[0]._id).toBe("midlane-melee-177");
   });
 
