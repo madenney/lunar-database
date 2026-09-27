@@ -51,6 +51,12 @@ import {
 const BATCH = 25; // replays per worker message
 const WRITE_BATCH = 500; // gameStats upserts per bulkWrite
 const DEFAULT_SHARD_SIZE = 5_000;
+/**
+ * Replays above this aren't parsed: a real game is 2-20 MB, and a runaway
+ * recording (one 1.66 GB file in the archive) exhausts a worker's memory and
+ * would fail its whole shard. They're recorded as errors instead.
+ */
+const MAX_REPLAY_BYTES = 200 * 1024 * 1024;
 
 function option(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -192,16 +198,21 @@ async function main() {
 
     try {
       const replays = await Replay.find({ usable: true, _id: { $gte: shard.fromId, $lte: shard.toId } })
-        .select({ filePath: 1, source: 1, startAt: 1 })
+        .select({ filePath: 1, source: 1, startAt: 1, fileSize: 1 })
         .lean();
       // Read in folder order: the archive is one spinning disk, and neighbouring
       // files need far fewer seeks (measured ~130 files/s vs ~80 in random order).
       replays.sort((a, b) => (a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0));
 
       const results: Result[] = [];
+      const oversized = replays.filter((d) => (d.fileSize ?? 0) > MAX_REPLAY_BYTES);
+      for (const d of oversized) {
+        results.push({ id: String(d._id), error: `Too large to parse (${Math.round((d.fileSize ?? 0) / 1e6)} MB)` });
+      }
+      const parseable = replays.filter((d) => (d.fileSize ?? 0) <= MAX_REPLAY_BYTES);
       const inFlight = new Set<Promise<void>>();
-      for (let i = 0; i < replays.length && !stopping && !lost; i += BATCH) {
-        const jobs = replays.slice(i, i + BATCH).map((d) => ({ id: String(d._id), filePath: d.filePath }));
+      for (let i = 0; i < parseable.length && !stopping && !lost; i += BATCH) {
+        const jobs = parseable.slice(i, i + BATCH).map((d) => ({ id: String(d._id), filePath: d.filePath }));
         const p = pool.run(jobs, extractors).then((r) => {
           results.push(...r);
         });
