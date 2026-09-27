@@ -17,6 +17,7 @@
     "fix-impossible-dates": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/fixImpossibleDates.ts",
     "build-sets": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/buildSets.ts",
     "build-tournaments": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/buildTournaments.ts",
+    "startgg-sync": "TS_NODE_TRANSPILE_ONLY=true node --max-old-space-size=6144 -r ts-node/register src/scripts/startggSync.ts",
     "register-full-db": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/registerFullDbBundle.ts",
     "crawl:monitor": "ts-node src/scripts/crawlMonitor.ts",
     "test": "jest --forceExit --detectOpenHandles",

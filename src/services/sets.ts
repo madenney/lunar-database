@@ -27,7 +27,7 @@ export interface SetGameRef {
 
 export interface ParsedSet {
   _id: string;
-  source: "startgg-export" | "jungle";
+  source: "startgg-export" | "jungle" | "startgg-match";
   tournament: TournamentRef;
   event: string | null;
   round: string | null;

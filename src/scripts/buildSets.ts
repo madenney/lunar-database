@@ -2,7 +2,8 @@
  * Build tournament sets from the metadata beside tournament replays:
  * context.json (start.gg set exports) and set.json (Jungle). Links each game's
  * Replay to its set (setId, setGame). Re-runnable: sets are replaced, and sets
- * no longer found are removed along with their replay links.
+ * no longer found are removed along with their replay links. Online sets matched
+ * by startgg-sync (source "startgg-match") are left alone.
  *
  *   npm run build-sets
  */
@@ -82,9 +83,10 @@ async function main() {
   }
   await flush();
 
-  const stale = await TournamentSet.deleteMany({ builtAt: { $lt: builtAt } });
+  const stale = await TournamentSet.deleteMany({ builtAt: { $lt: builtAt }, source: { $ne: "startgg-match" } });
+  const matchedIds = (await TournamentSet.find({ source: "startgg-match" }).select({ _id: 1 }).lean()).map((s) => String(s._id));
   const unlinked = await Replay.updateMany(
-    { setId: { $type: "string", $nin: ids } },
+    { setId: { $type: "string", $nin: [...ids, ...matchedIds] } },
     { $set: { setId: null, setGame: null } }
   );
   console.log(

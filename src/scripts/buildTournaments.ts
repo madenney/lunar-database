@@ -1,6 +1,7 @@
 /**
  * Group tournament replays into tournaments (services/tournaments.ts): by their
  * set's start.gg or Jungle identity, else by folder (config/tournamentSeries.json).
+ * Online games belong to a tournament only through a matched set (startgg-sync).
  * Writes Replay.tournamentKey and one summary per tournament. Run after
  * build-sets: npm run build-tournaments
  */
@@ -40,7 +41,9 @@ async function main() {
   let ops: any[] = [];
   let seen = 0;
   let changed = 0;
-  const cursor = Replay.find({ source: "tournament" })
+  // Tournament-folder games, online games in a matched set, and anything grouped
+  // before (so a game whose set went away loses its key).
+  const cursor = Replay.find({ $or: [{ source: "tournament" }, { setId: { $type: "string" } }, { tournamentKey: { $type: "string" } }] })
     .select({ filePath: 1, setId: 1, startAt: 1, stageId: 1, usable: 1, tournamentKey: 1, "players.characterId": 1, "players.displayName": 1, "players.tag": 1 })
     .lean()
     .cursor({ batchSize: 5000 });
