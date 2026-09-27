@@ -14,6 +14,7 @@ import submissionsRoutes from "./submissions";
 import playersRoutes from "./players";
 import { Player } from "../models/Player";
 import { GameStats } from "../models/GameStats";
+import { PlayerStats } from "../models/PlayerStats";
 import { clearGameDetailCache, detailFile } from "../services/gameDetail";
 import fs from "fs";
 import os from "os";
@@ -392,6 +393,29 @@ describe("extracted stats", () => {
   it("404s for games without stats and for malformed ids", async () => {
     expect((await get(`/api/replays/${new mongoose.Types.ObjectId()}/stats`)).status).toBe(404);
     expect((await get(`/api/replays/not-an-id/stats`)).status).toBe(404);
+  });
+});
+
+describe("GET /api/players/:code/profile", () => {
+  afterEach(async () => {
+    await PlayerStats.deleteMany({});
+  });
+
+  it("returns a profile by case-insensitive, URL-encoded code, without account identifiers", async () => {
+    await PlayerStats.collection.insertOne({
+      connectCode: "MANG#0", games: 10, decided: 9, wins: 6, names: [{ name: "mang0", games: 10 }],
+      userIds: ["secret-uid"], otherCodes: ["ALT#1"], totals: { kills: 30 }, builtAt: new Date(),
+    });
+    const { status, body } = await get("/api/players/mang%230/profile");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ connectCode: "MANG#0", games: 10, wins: 6, totals: { kills: 30 } });
+    expect(body).not.toHaveProperty("userIds");
+    expect(body).not.toHaveProperty("otherCodes");
+  });
+
+  it("404s for unknown and malformed codes", async () => {
+    expect((await get("/api/players/NOPE%231/profile")).status).toBe(404);
+    expect((await get("/api/players/not-a-code/profile")).status).toBe(404);
   });
 });
 

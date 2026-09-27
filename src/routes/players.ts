@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { Player } from "../models/Player";
+import { PlayerStats } from "../models/PlayerStats";
 import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
@@ -118,6 +119,37 @@ router.get("/search", playerSearchLimiter, async (req: Request, res: Response) =
     }).catch(() => {});
 
     res.json(results);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+const profileLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
+/** Slippi connect codes: letters/digits, "#", digits (case-insensitive in URLs). */
+const CONNECT_CODE = /^[A-Z0-9]{1,8}#[0-9]{1,6}$/;
+
+// GET /api/players/:code/profile — career stats for one connect code (1v1 games),
+// built by npm run build-player-stats. :code is URL-encoded, e.g. MANG%230.
+// Slippi user IDs and the codes they link are kept private until players can
+// verify their accounts: listing them would expose alternate accounts.
+router.get("/:code/profile", profileLimiter, async (req: Request, res: Response) => {
+  try {
+    const code = String(req.params.code).toUpperCase();
+    if (!CONNECT_CODE.test(code)) {
+      res.status(404).json({ error: "Player not found" });
+      return;
+    }
+    const profile = await PlayerStats.findOne({ connectCode: code }).select({ _id: 0, __v: 0, userIds: 0, otherCodes: 0 }).lean();
+    if (!profile) {
+      res.status(404).json({ error: "Player not found" });
+      return;
+    }
+    res.json(profile);
   } catch (err) {
     sendError(res, err);
   }

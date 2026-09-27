@@ -128,6 +128,12 @@ LAN): `scripts/stats/run-extractor.sh` opens the tunnel and starts a runner from
 `--status`. After a run, `npm run backfill-match-info -- --apply` copies match info
 onto replays crawled before it was recorded at crawl time.
 
+Player profiles (`playerStats`, served by `GET /api/players/:code/profile`) are
+rebuilt from `gameStats` with `npm run build-player-stats` (about 2.5 minutes for
+the whole archive). Run it after a stats run and after extending a run to new
+replays. Profiles cover human 1v1 games per connect code; Slippi user IDs and the
+alternate codes they link are stored but not served publicly.
+
 ## API
 
 ### `GET /api/replays`

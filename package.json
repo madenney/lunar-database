@@ -13,6 +13,7 @@
     "db:status": "systemctl is-active mongod && mongosh --quiet --eval 'db.stats().collections + \" collections, \" + db.stats().objects + \" documents\"' lm-database",
     "crawl": "ts-node src/scripts/crawl.ts",
     "backfill-match-info": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/backfillMatchInfo.ts",
+    "build-player-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/buildPlayerStats.ts",
     "register-full-db": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/registerFullDbBundle.ts",
     "crawl:monitor": "ts-node src/scripts/crawlMonitor.ts",
     "test": "jest --forceExit --detectOpenHandles",
