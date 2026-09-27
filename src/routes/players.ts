@@ -133,6 +133,34 @@ const profileLimiter = createRateLimiter({
 /** Slippi connect codes: letters/digits, "#", digits (case-insensitive in URLs). */
 const CONNECT_CODE = /^[A-Z0-9]{1,8}#[0-9]{1,6}$/;
 
+// GET /api/players/top?limit=50 — the most active players with profiles: code,
+// primary name, record, main character and last game. Primary names only (see
+// the profile route).
+router.get("/top", profileLimiter, async (req: Request, res: Response) => {
+  try {
+    const raw = parseInt(String(req.query.limit ?? "50"), 10);
+    const limit = Number.isFinite(raw) ? Math.min(100, Math.max(1, raw)) : 50;
+    const rows = await PlayerStats.find({})
+      .sort({ games: -1 })
+      .limit(limit)
+      .select({ _id: 0, connectCode: 1, names: { $slice: 1 }, games: 1, decided: 1, wins: 1, characters: { $slice: 1 }, lastPlayed: 1 })
+      .lean();
+    res.json(
+      rows.map((r) => ({
+        connectCode: r.connectCode,
+        name: r.names?.[0]?.name ?? null,
+        games: r.games,
+        decided: r.decided,
+        wins: r.wins,
+        mainCharacterId: r.characters?.[0]?.characterId ?? null,
+        lastPlayed: r.lastPlayed ?? null,
+      }))
+    );
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // GET /api/players/:code/profile — career stats for one connect code (1v1 games),
 // built by npm run build-player-stats. :code is URL-encoded, e.g. MANG%230.
 // Privacy: Slippi user IDs, the codes they link (a player's code history) and

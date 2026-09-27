@@ -425,6 +425,17 @@ describe("GET /api/players/:code/profile", () => {
     expect(body.opponents.map((o: any) => [o.connectCode, o.name])).toEqual([["ZAIN#0", "Zain"], ["NOPR#1", null]]);
   });
 
+  it("lists the most active players by primary name only", async () => {
+    await PlayerStats.collection.insertMany([
+      { connectCode: "A#1", games: 5, decided: 4, wins: 2, names: [{ name: "A", games: 4 }, { name: "old A", games: 1 }], characters: [{ characterId: 2, games: 5 }], userIds: ["u"], totals: {}, builtAt: new Date() },
+      { connectCode: "B#2", games: 50, decided: 40, wins: 30, names: [{ name: "B", games: 50 }], characters: [], totals: {}, builtAt: new Date() },
+    ]);
+    const { status, body } = await get("/api/players/top?limit=10");
+    expect(status).toBe(200);
+    expect(body.map((p: any) => p.connectCode)).toEqual(["B#2", "A#1"]);
+    expect(body[1]).toEqual({ connectCode: "A#1", name: "A", games: 5, decided: 4, wins: 2, mainCharacterId: 2, lastPlayed: null });
+  });
+
   it("404s for unknown and malformed codes", async () => {
     expect((await get("/api/players/NOPE%231/profile")).status).toBe(404);
     expect((await get("/api/players/not-a-code/profile")).status).toBe(404);
