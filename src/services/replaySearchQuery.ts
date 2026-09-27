@@ -24,6 +24,8 @@ export interface ReplaySearchParams {
   /** Comma-joined subset of REPLAY_SOURCES, e.g. "tournament,ranked".
    *  Absent/empty means no filter (all sources). */
   source?: string;
+  /** Comma-joined tournament keys (e.g. "kotj-7,midlane-melee-177"); games of any of them. */
+  tournament?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -122,6 +124,13 @@ function rankTierNames(param: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const TOURNAMENT_KEY_RE = /^[a-z0-9-]{1,80}$/;
+
+/** Valid, de-duplicated tournament keys from a comma-joined param. */
+export function tournamentKeys(param: string | undefined): string[] {
+  return Array.from(new Set(splitParam(param).map((k) => k.toLowerCase()).filter((k) => TOURNAMENT_KEY_RE.test(k))));
+}
+
 function prefixMatch(match: Record<string, any>, prefix: string): Record<string, any> {
   const result: any = {};
   for (const [key, value] of Object.entries(match)) {
@@ -191,6 +200,13 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
     query.source = sources[0];
   } else if (sources.length > 1) {
     query.source = { $in: sources };
+  }
+
+  const tournaments = tournamentKeys(params.tournament);
+  if (tournaments.length === 1) {
+    query.tournamentKey = tournaments[0];
+  } else if (tournaments.length > 1) {
+    query.tournamentKey = { $in: tournaments };
   }
 
   if (params.startDate || params.endDate) {

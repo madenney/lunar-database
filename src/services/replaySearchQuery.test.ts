@@ -50,7 +50,22 @@ describe("buildReplaySearchQuery two-sided matchups", () => {
   });
 });
 
+describe("buildReplaySearchQuery tournaments", () => {
+  it("matches one or several tournament keys and drops invalid ones", () => {
+    expect(inner({ tournament: "KOTJ-7" }).tournamentKey).toBe("kotj-7");
+    expect(inner({ tournament: "kotj-7, midlane-melee-177,kotj-7" }).tournamentKey).toEqual({ $in: ["kotj-7", "midlane-melee-177"] });
+    expect(inner({ tournament: "$ne,../x" }).tournamentKey).toBeUndefined();
+  });
+});
+
 describe("parseFilter", () => {
+  it("keeps valid tournament keys, which count as a filter", () => {
+    const filter = parseFilter({ tournament: "kotj-7,Bad Key" });
+    expect(filter.tournament).toBe("kotj-7");
+    expect(hasFilterOrLimit(filter).hasFilter).toBe(true);
+    expect(parseFilter({ tournament: { $ne: null } }).tournament).toBeUndefined();
+  });
+
   it("keeps every value of a long list instead of cutting the string", () => {
     const codes = Array.from({ length: 20 }, (_, i) => `CODE#${100 + i}`);
     const filter = parseFilter({ p1ConnectCode: codes.join(",") });

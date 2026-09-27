@@ -497,6 +497,10 @@ describe("tournaments and sets", () => {
     const { body } = await get("/api/replays?tournament=kotj-7");
     expect(body.replays).toHaveLength(1);
     expect(body.pagination.total).toBe(1);
+    // Estimate (and so job creation) selects the same games.
+    const est = await post("/api/replays/estimate", { tournament: "kotj-7" });
+    expect(est.status).toBe(200);
+    expect(est.body.replayCount).toBe(1);
   });
 });
 

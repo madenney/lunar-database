@@ -17,6 +17,8 @@ export interface IJobFilter {
   endDate?: string;
   /** Comma-joined replay sources, e.g. "tournament,ranked". Empty = all. */
   source?: string;
+  /** Comma-joined tournament keys, e.g. "kotj-7". */
+  tournament?: string;
   /** Comma-joined rank tiers per side (ranked dataset only), e.g. "master". */
   p1Rank?: string;
   p2Rank?: string;
@@ -84,6 +86,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     startDate: { type: String },
     endDate: { type: String },
     source: { type: String },
+    tournament: { type: String },
     p1Rank: { type: String },
     p2Rank: { type: String },
     maxFiles: { type: Number },

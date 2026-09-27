@@ -1,6 +1,6 @@
 import { IJobFilter } from "../models/Job";
 import { REPLAY_SOURCES } from "../models/Replay";
-import { MAX_LIST_VALUES, RANK_KEYS } from "./replaySearchQuery";
+import { MAX_LIST_VALUES, RANK_KEYS, tournamentKeys } from "./replaySearchQuery";
 
 const MAX_FILTER_STRING_LEN = 100;
 /** Largest byte budget a job may request. The estimator relies on this bound. */
@@ -72,6 +72,8 @@ export function parseFilter(body: Record<string, any>): IJobFilter {
   if (p1Rank) filter.p1Rank = p1Rank;
   const p2Rank = cleanRank(safeString(body.p2Rank));
   if (p2Rank) filter.p2Rank = p2Rank;
+  const tournaments = tournamentKeys(safeString(body.tournament, MAX_LIST_VALUES * 81));
+  if (tournaments.length > 0) filter.tournament = tournaments.slice(0, MAX_LIST_VALUES).join(",");
   if (body.maxFiles != null) {
     const n = Number(body.maxFiles);
     if (Number.isFinite(n) && n >= 1) filter.maxFiles = Math.floor(n);
