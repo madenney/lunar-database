@@ -3,6 +3,7 @@ import {
   decideWinner,
   extractGame,
   gameFingerprint,
+  statsWithoutActions,
   matchMode,
   EXTRACTORS,
   EXTRACTOR_NAMES,
@@ -214,5 +215,19 @@ describe("readMatchInfo", () => {
     });
     expect(readMatchInfo({ matchId: "mode.unranked-y" })).toMatchObject({ id: "mode.unranked-y", mode: "unranked" });
     expect(readMatchInfo(undefined)).toEqual({ id: null, mode: null, gameNumber: null, tiebreaker: null });
+  });
+});
+
+describe("statsWithoutActions", () => {
+  it("matches slippi-js getStats apart from action counts", () => {
+    const { SlippiGame } = jest.requireActual("@slippi/slippi-js/node");
+    const file = path.join(__dirname, "../__fixtures__/test.slp");
+    const full = new SlippiGame(file).getStats();
+    const fallback = statsWithoutActions(new SlippiGame(file));
+    const { actionCounts, ...rest } = full;
+    const { actionCounts: none, ...fallbackRest } = fallback;
+    expect(none).toEqual([]);
+    expect(actionCounts.length).toBeGreaterThan(0);
+    expect(fallbackRest).toEqual(rest);
   });
 });

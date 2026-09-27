@@ -14,6 +14,7 @@
  *   npm run extract-stats -- --run NAME --plan [--extractors a,b] [--shard-size N]
  *       create the run (default: all extractors) or extend it to new replays
  *   npm run extract-stats -- --run NAME --detail-dir DIR [--workers N] [--max-shards N] [--lease-minutes N]
+ *   npm run extract-stats -- --run NAME --plan-retry   queue the run's errored games again
  *   npm run extract-stats -- --run NAME --status
  *   npm run extract-stats -- --runs                 list runs
  *
@@ -42,6 +43,7 @@ import {
   commitShard,
   failShard,
   planShards,
+  planRetryShards,
   publishDetailFile,
   releaseShard,
   renewLease,
@@ -144,6 +146,16 @@ async function main() {
     console.log(`Run ${runName} shards:`, await shardStatusCounts(runName));
     return mongoose.disconnect();
   }
+  if (process.argv.includes("--plan-retry")) {
+    const run = await StatsRun.findById(runName).lean();
+    if (!run) throw new Error(`No run "${runName}"`);
+    assertRunMatchesCode(run);
+    const size = Number(option("--shard-size")) || DEFAULT_SHARD_SIZE;
+    const queued = await planRetryShards(run._id, size);
+    console.log(`Run ${run._id}: queued ${queued} errored game(s) for retry`);
+    console.log(await shardStatusCounts(run._id));
+    return mongoose.disconnect();
+  }
   if (process.argv.includes("--plan")) {
     const requested = option("--extractors")?.split(",").map((e) => e.trim()) ?? EXTRACTOR_NAMES;
     const unknown = requested.filter((e) => !(EXTRACTOR_NAMES as string[]).includes(e));
@@ -197,7 +209,8 @@ async function main() {
     }, leaseMs / 4);
 
     try {
-      const replays = await Replay.find({ usable: true, _id: { $gte: shard.fromId, $lte: shard.toId } })
+      const range = shard.replayIds?.length ? { $in: shard.replayIds } : { $gte: shard.fromId, $lte: shard.toId };
+      const replays = await Replay.find({ usable: true, _id: range })
         .select({ filePath: 1, source: 1, startAt: 1, fileSize: 1 })
         .lean();
       // Read in folder order: the archive is one spinning disk, and neighbouring

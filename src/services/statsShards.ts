@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import { Replay } from "../models/Replay";
 import { StatsShard, IStatsShard } from "../models/StatsShard";
 import { StatsRun, IStatsRun } from "../models/StatsRun";
+import { GameStats } from "../models/GameStats";
 import { EXTRACTORS, type ExtractorName } from "./gameStats";
 
 /**
@@ -100,6 +101,32 @@ export async function planShards(run: string, size: number): Promise<number> {
   }
   await save();
   return created;
+}
+
+/**
+ * Plan retry shards for a run's games that errored (whole-file errors), e.g.
+ * after fixing the cause. Each shard lists its replays; the range shards and
+ * their files are left as they are. Returns the number of games queued.
+ */
+export async function planRetryShards(run: string, size: number): Promise<number> {
+  const filter: Record<string, unknown> = { error: { $ne: null } };
+  const ids = (await GameStats.find(filter).select({ replayId: 1 }).sort({ replayId: 1 }).lean()).map(
+    (d) => d.replayId as mongoose.Types.ObjectId
+  );
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  for (let i = 0; i < ids.length; i += size) {
+    const chunk = ids.slice(i, i + size);
+    await StatsShard.create({
+      _id: `${run}-retry${stamp}-${i / size}`,
+      run,
+      fromId: chunk[0],
+      toId: chunk[chunk.length - 1],
+      planned: chunk.length,
+      replayIds: chunk,
+      order: Math.random(),
+    });
+  }
+  return ids.length;
 }
 
 /** Claim the next available shard, or null when none is left. */

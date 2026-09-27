@@ -16,6 +16,7 @@ import {
   commitShard,
   failShard,
   planShards,
+  planRetryShards,
   publishDetailFile,
   releaseShard,
   renewLease,
@@ -183,5 +184,25 @@ describe("GameStats writes", () => {
     expect(stored!.match).toEqual(x.fields.match);
     expect(stored!.extractors).toEqual({ core: 2, identity: 1 });
     await GameStats.deleteMany({});
+  });
+});
+
+describe("planRetryShards", () => {
+  afterEach(async () => {
+    await GameStats.deleteMany({});
+  });
+
+  it("queues only the games that errored, as shards listing their replays", async () => {
+    const ok = new mongoose.Types.ObjectId();
+    const bad = [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()];
+    await GameStats.collection.insertMany([
+      { replayId: ok, filePath: "ok", error: null, extractedAt: new Date() },
+      ...bad.map((replayId) => ({ replayId, filePath: "bad", error: "boom", extractedAt: new Date() })),
+    ]);
+    expect(await planRetryShards(V, 2)).toBe(3);
+    const shards = await StatsShard.find({ run: V, replayIds: { $exists: true } }).sort({ _id: 1 }).lean();
+    expect(shards.map((s) => s.planned)).toEqual([2, 1]);
+    expect(shards.flatMap((s) => s.replayIds!.map(String)).sort()).toEqual(bad.map(String).sort());
+    expect(shards.every((s) => s.status === "pending" && s._id.startsWith(`${V}-retry`))).toBe(true);
   });
 });

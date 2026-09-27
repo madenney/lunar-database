@@ -25,6 +25,11 @@ export interface IStatsShard extends Document<string> {
   toId: mongoose.Types.ObjectId;
   /** Usable replays in the range when planned. */
   planned: number;
+  /**
+   * A retry shard's explicit replays (e.g. games that errored), instead of the
+   * [fromId, toId] range. Its detail files are separate from the range shards'.
+   */
+  replayIds?: mongoose.Types.ObjectId[] | null;
   /** Random claim order, so work (and early results) spreads across the archive. */
   order: number;
   status: ShardStatus;
@@ -47,6 +52,7 @@ const StatsShardSchema = new Schema<IStatsShard>(
     fromId: { type: Schema.Types.ObjectId, required: true },
     toId: { type: Schema.Types.ObjectId, required: true },
     planned: { type: Number, required: true },
+    replayIds: { type: [Schema.Types.ObjectId], default: undefined },
     order: { type: Number, required: true },
     status: { type: String, enum: SHARD_STATUSES, default: "pending" },
     owner: { type: String, default: null },

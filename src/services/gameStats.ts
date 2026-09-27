@@ -1,6 +1,15 @@
 import crypto from "crypto";
 import fs from "fs";
-import { SlippiGame } from "@slippi/slippi-js/node";
+import {
+  ComboComputer,
+  ConversionComputer,
+  Frames,
+  InputComputer,
+  SlippiGame,
+  Stats,
+  StockComputer,
+  generateOverallStats,
+} from "@slippi/slippi-js/node";
 import {
   detectCombos,
   detectPhantoms,
@@ -257,7 +266,17 @@ export function extractGame(filePath: string, names: readonly ExtractorName[] = 
   // Parsed pieces are shared between extractors and computed only when needed.
   let stats: ReturnType<SlippiGame["getStats"]> | undefined;
   const getStats = () => {
-    if (stats === undefined) stats = game.getStats();
+    if (stats === undefined) {
+      try {
+        stats = game.getStats();
+      } catch {
+        // slippi-js's action counter crashes on some games (it has no landing-lag
+        // data for some character/aerial pairs). Everything else still computes;
+        // only this game's action counts are missing.
+        stats = statsWithoutActions(game);
+        (out.errors.core ??= []).push("actions");
+      }
+    }
     if (!stats) throw new Error("No stats");
     return stats;
   };
@@ -357,6 +376,43 @@ export function extractGame(filePath: string, names: readonly ExtractorName[] = 
     out.versions[name] = EXTRACTORS[name];
   }
   return out;
+}
+
+/**
+ * slippi-js's getStats() without its ActionsComputer: the same stat computers,
+ * fed the parsed frames in order, and the same overall stats. actionCounts is
+ * empty. Used when getStats() throws inside the action counter.
+ */
+export function statsWithoutActions(game: SlippiGame): NonNullable<ReturnType<SlippiGame["getStats"]>> {
+  const settings = game.getSettings();
+  if (!settings) throw new Error("No settings");
+  const frames = game.getFrames();
+  const input = new InputComputer();
+  const stock = new StockComputer();
+  const conversion = new ConversionComputer();
+  const combo = new ComboComputer();
+  const computer = new Stats();
+  computer.register(input, stock, conversion, combo);
+  computer.setup(settings);
+  const numbers = Object.keys(frames)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const n of numbers) computer.addFrame(frames[n]);
+  computer.process();
+  const lastFrame = numbers.length ? numbers[numbers.length - 1] : Frames.FIRST;
+  const playableFrameCount = lastFrame < Frames.FIRST_PLAYABLE ? 0 : lastFrame - Frames.FIRST_PLAYABLE;
+  const conversions = conversion.fetch();
+  const inputs = input.fetch();
+  return {
+    lastFrame,
+    playableFrameCount,
+    stocks: stock.fetch(),
+    conversions,
+    combos: combo.fetch(),
+    actionCounts: [],
+    overall: generateOverallStats({ settings, inputs, conversions, playableFrameCount }),
+    gameComplete: game.getGameEnd() != null,
+  };
 }
 
 /** Same for every recording of one played game; see IdentitySummary.fingerprint. */
