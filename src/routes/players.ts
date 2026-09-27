@@ -135,8 +135,9 @@ const CONNECT_CODE = /^[A-Z0-9]{1,8}#[0-9]{1,6}$/;
 
 // GET /api/players/:code/profile — career stats for one connect code (1v1 games),
 // built by npm run build-player-stats. :code is URL-encoded, e.g. MANG%230.
-// Slippi user IDs and the codes they link are kept private until players can
-// verify their accounts: listing them would expose alternate accounts.
+// Privacy: Slippi user IDs, the codes they link (a player's code history) and
+// former display names are stored but not served until players can verify their
+// accounts and choose what to show. Only primary names are public.
 router.get("/:code/profile", profileLimiter, async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code).toUpperCase();
@@ -149,7 +150,19 @@ router.get("/:code/profile", profileLimiter, async (req: Request, res: Response)
       res.status(404).json({ error: "Player not found" });
       return;
     }
-    res.json(profile);
+    // Only each player's primary (most used) name is public: former names can be
+    // ones a player chose to leave behind. Opponents are named the same way.
+    const opponentCodes = (profile.opponents ?? []).map((o) => o.connectCode);
+    const primaries = new Map(
+      (await PlayerStats.find({ connectCode: { $in: opponentCodes } }).select({ connectCode: 1, names: { $slice: 1 } }).lean()).map(
+        (o) => [o.connectCode, o.names?.[0]?.name ?? null]
+      )
+    );
+    res.json({
+      ...profile,
+      names: (profile.names ?? []).slice(0, 1),
+      opponents: (profile.opponents ?? []).map((o) => ({ ...o, name: primaries.get(o.connectCode) ?? null })),
+    });
   } catch (err) {
     sendError(res, err);
   }

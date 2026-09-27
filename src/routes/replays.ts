@@ -17,6 +17,13 @@ import { sanitizeFilters } from "../utils/sanitizeFilters";
 
 const router = Router();
 
+/**
+ * Stored replay fields never sent to the public: the server path, and the import
+ * folder label, whose collection folders can carry a person's real name. Both stay
+ * in the database for bundling and backfills.
+ */
+const PUBLIC_REPLAY_EXCLUDE = "-filePath -folderLabel";
+
 /** Per-player fields of the compact stats attached to search results. */
 const ROW_PLAYER_FIELDS = [
   "playerIndex",
@@ -145,7 +152,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
-      Replay.find(finalQuery).select("-filePath").sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
+      Replay.find(finalQuery).select(PUBLIC_REPLAY_EXCLUDE).sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
       Replay.countDocuments(finalQuery).maxTimeMS(10000),
     ]);
 
@@ -186,7 +193,7 @@ const replayGetLimiter = createRateLimiter({
 // GET /api/replays/:id
 router.get("/:id", replayGetLimiter, async (req: Request, res: Response) => {
   try {
-    const replay = await Replay.findById(req.params.id).select("-filePath").lean();
+    const replay = await Replay.findById(req.params.id).select(PUBLIC_REPLAY_EXCLUDE).lean();
     if (!replay) {
       res.status(404).json({ error: "Replay not found" });
       return;
@@ -221,7 +228,10 @@ router.get("/:id/stats", statsLimiter, async (req: Request, res: Response) => {
       return;
     }
     const events = loadGameEvents(stats);
-    const { shards: _shards, extractorErrors, ...summary } = stats;
+    // Slippi user IDs link a player's connect codes and console nicknames can be
+    // personal; neither is shown publicly (see the players route).
+    const { shards: _shards, extractorErrors, consoleNick: _nick, ...summary } = stats;
+    summary.players = summary.players?.map(({ userId: _uid, ...p }) => p) as typeof summary.players;
     res.json({ summary, events, extractorErrors: extractorErrors ?? {} });
   } catch (err) {
     sendError(res, err);

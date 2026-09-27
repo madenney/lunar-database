@@ -221,6 +221,10 @@ describe("GET /api/replays", () => {
 
     const { body } = await get("/api/replays");
     expect(body.replays.length).toBe(2);
+    for (const r of body.replays) {
+      expect(r).not.toHaveProperty("filePath");
+      expect(r).not.toHaveProperty("folderLabel");
+    }
   });
 
   it("filters by connectCode", async () => {
@@ -349,8 +353,9 @@ describe("extracted stats", () => {
       winner: 0,
       winMethod: "stocks",
       lastFrame: 7200,
+      consoleNick: "Matt's Wii",
       players: [
-        { playerIndex: 0, characterColor: 2, startStocks: 4, stocksLost: 1, kills: 4, openings: 20, damageDealt: 400, neutralWins: 12, inputsPerMinute: 300, actions: { wavedashCount: 9 } },
+        { playerIndex: 0, userId: "secret-uid", characterColor: 2, startStocks: 4, stocksLost: 1, kills: 4, openings: 20, damageDealt: 400, neutralWins: 12, inputsPerMinute: 300, actions: { wavedashCount: 9 } },
         { playerIndex: 1, characterColor: 0, startStocks: 4, stocksLost: 4, kills: 1, openings: 15, damageDealt: 300, neutralWins: 9, inputsPerMinute: 250 },
       ],
     });
@@ -385,7 +390,8 @@ describe("extracted stats", () => {
     expect(status).toBe(200);
     expect(body.summary).toMatchObject({ winner: 0, extractors: { core: 2, clipper: 1 } });
     expect(body.summary.players[0].actions).toEqual({ wavedashCount: 9 });
-    for (const hidden of ["filePath", "contentHash", "shards", "_id"]) expect(body.summary).not.toHaveProperty(hidden);
+    for (const hidden of ["filePath", "contentHash", "shards", "_id", "consoleNick"]) expect(body.summary).not.toHaveProperty(hidden);
+    for (const p of body.summary.players) expect(p).not.toHaveProperty("userId");
     expect(body.events.core.deaths).toEqual([[1, 900, 120, 3, 0, 17, 60]]);
     expect(body.events.clipper.combos).toHaveLength(1);
   });
@@ -402,15 +408,21 @@ describe("GET /api/players/:code/profile", () => {
   });
 
   it("returns a profile by case-insensitive, URL-encoded code, without account identifiers", async () => {
-    await PlayerStats.collection.insertOne({
-      connectCode: "MANG#0", games: 10, decided: 9, wins: 6, names: [{ name: "mang0", games: 10 }],
-      userIds: ["secret-uid"], otherCodes: ["ALT#1"], totals: { kills: 30 }, builtAt: new Date(),
-    });
+    await PlayerStats.collection.insertMany([
+      {
+        connectCode: "MANG#0", games: 10, decided: 9, wins: 6, names: [{ name: "mang0", games: 8 }, { name: "old tag", games: 2 }],
+        userIds: ["secret-uid"], otherCodes: ["ALT#1"], totals: { kills: 30 }, builtAt: new Date(),
+        opponents: [{ connectCode: "ZAIN#0", name: "zain's old name", games: 5, decided: 5, wins: 2 }, { connectCode: "NOPR#1", name: "x", games: 1, decided: 1, wins: 1 }],
+      },
+      { connectCode: "ZAIN#0", games: 20, decided: 20, wins: 15, names: [{ name: "Zain", games: 19 }, { name: "zain's old name", games: 1 }], totals: {}, builtAt: new Date() },
+    ]);
     const { status, body } = await get("/api/players/mang%230/profile");
     expect(status).toBe(200);
     expect(body).toMatchObject({ connectCode: "MANG#0", games: 10, wins: 6, totals: { kills: 30 } });
     expect(body).not.toHaveProperty("userIds");
     expect(body).not.toHaveProperty("otherCodes");
+    expect(body.names).toEqual([{ name: "mang0", games: 8 }]);
+    expect(body.opponents.map((o: any) => [o.connectCode, o.name])).toEqual([["ZAIN#0", "Zain"], ["NOPR#1", null]]);
   });
 
   it("404s for unknown and malformed codes", async () => {
@@ -420,12 +432,13 @@ describe("GET /api/players/:code/profile", () => {
 });
 
 describe("GET /api/replays/:id", () => {
-  it("returns a replay by id without filePath", async () => {
-    const replay = await Replay.create({ filePath: "/test/x.slp", fileHash: "x" });
+  it("returns a replay by id without its server path or folder label", async () => {
+    const replay = await Replay.create({ filePath: "/test/x.slp", fileHash: "x", folderLabel: "netplay/Someone Realname/2023" });
 
     const { status, body } = await get(`/api/replays/${replay._id}`);
     expect(status).toBe(200);
     expect(body.filePath).toBeUndefined();
+    expect(body.folderLabel).toBeUndefined();
   });
 
   it("returns 404 for unknown id", async () => {
