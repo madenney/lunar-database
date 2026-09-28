@@ -1,4 +1,5 @@
 import { Job } from "../models/Job";
+import { deleteFromStorage } from "./storage";
 
 export interface CleanupResult {
   checked: number;
@@ -10,8 +11,9 @@ export interface CleanupResult {
 const DEFAULT_BATCH_SIZE = 1000;
 
 /**
- * DB-only cleanup: nullify r2Key on expired jobs so downloadReady stays accurate.
- * Actual object deletion is handled by B2 lifecycle rules on the jobs/ prefix.
+ * Expire job bundles: delete the storage object and null r2Key, so what the
+ * database says is downloadable matches what's in storage. (A bucket lifecycle
+ * rule on jobs/ remains as a safety net for anything this misses.)
  *
  * Processes in bounded batches (L4) so a large backlog never loads every matching
  * job into memory at once. `batchSize` is injectable for tests.
@@ -52,13 +54,19 @@ export async function cleanupExpiredJobs(
   // each pass fetches the next set; we stop when a page is short or makes no
   // progress (e.g. every update in it errored — avoids re-fetching the same rows).
   for (;;) {
-    const batch = await Job.find(filter).select("bundleSize").limit(batchSize).lean();
+    const batch = await Job.find(filter).select("bundleSize r2Key").limit(batchSize).lean();
     if (batch.length === 0) break;
 
     let cleanedThisBatch = 0;
     for (const job of batch) {
       result.checked++;
       try {
+        // Only temporary bundles: pinned ones live under archive/ and are excluded above.
+        if (job.r2Key?.startsWith("jobs/")) {
+          await deleteFromStorage(job.r2Key).catch((err) =>
+            console.error(`Could not delete ${job.r2Key} from storage (lifecycle rule will):`, (err as Error).message),
+          );
+        }
         await Job.updateOne({ _id: job._id }, { $set: { r2Key: null } });
         result.cleaned++;
         cleanedThisBatch++;

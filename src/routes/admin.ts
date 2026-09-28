@@ -576,7 +576,7 @@ router.post("/jobs/:id/unpin", adminMutationLimiter, async (req: Request, res: R
   }
 });
 
-// POST /api/admin/storage/cleanup — on-demand expired job cleanup (DB-only, B2 lifecycle handles objects)
+// POST /api/admin/storage/cleanup — on-demand expired job cleanup (deletes expired jobs/ bundles)
 router.post("/storage/cleanup", adminMutationLimiter, async (req: Request, res: Response) => {
   try {
     const rawDays = Number(req.body.maxAgeDays ?? config.storageCleanupAfterDays);

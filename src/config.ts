@@ -75,7 +75,8 @@ export const config = {
   // Estimate settings
   estimateUploadSpeedMbps: parseInt(process.env.ESTIMATE_UPLOAD_SPEED_MBPS || "10", 10),
 
-  // Storage cleanup (DB-only — B2 lifecycle rules handle object expiry)
+  // Storage cleanup: expired job bundles are deleted from storage and forgotten
+  // (a bucket lifecycle rule on jobs/ is the safety net)
   storageCleanupAfterDays: parseInt(process.env.STORAGE_CLEANUP_AFTER_DAYS || "3", 10),
   storageCleanupIntervalMinutes: parseInt(process.env.STORAGE_CLEANUP_INTERVAL_MINUTES || "60", 10),
 

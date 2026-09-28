@@ -2,6 +2,9 @@ import mongoose from "mongoose";
 import { Job } from "../models/Job";
 import { cleanupExpiredJobs } from "./storageCleanup";
 
+const deleteMock = jest.fn().mockResolvedValue(undefined);
+jest.mock("./storage", () => ({ deleteFromStorage: (...a: any[]) => deleteMock(...a) }));
+
 const DAY = 24 * 60 * 60 * 1000;
 
 beforeAll(async () => {
@@ -13,6 +16,7 @@ afterAll(async () => {
 });
 afterEach(async () => {
   await Job.deleteMany({});
+  deleteMock.mockClear();
 });
 
 function expiredJob(overrides: Record<string, any> = {}) {
@@ -65,5 +69,27 @@ describe("cleanupExpiredJobs (L4 batching)", () => {
     expect(res.freedBytes).toBe(200);
     // nothing nulled
     expect(await Job.countDocuments({ r2Key: { $ne: null } })).toBe(2);
+  });
+});
+
+describe("cleanupExpiredJobs storage deletion", () => {
+  it("deletes an expired bundle's storage object and forgets its key", async () => {
+    const job = await expiredJob({ r2Key: "jobs/old.zip" });
+    await cleanupExpiredJobs(3);
+    expect(deleteMock).toHaveBeenCalledWith("jobs/old.zip");
+    expect((await Job.findById(job._id).lean())!.r2Key).toBeNull();
+  });
+
+  it("still expires the job when the storage delete fails", async () => {
+    deleteMock.mockRejectedValueOnce(new Error("network"));
+    const job = await expiredJob({ r2Key: "jobs/flaky.zip" });
+    await cleanupExpiredJobs(3);
+    expect((await Job.findById(job._id).lean())!.r2Key).toBeNull();
+  });
+
+  it("never deletes pinned archive bundles", async () => {
+    await expiredJob({ r2Key: "archive/keep.zip", pinned: true });
+    await cleanupExpiredJobs(3);
+    expect(deleteMock).not.toHaveBeenCalled();
   });
 });
