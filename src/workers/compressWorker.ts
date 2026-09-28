@@ -7,22 +7,31 @@ import { createBundle, cleanupJobTemp, BundleEntry } from "../services/bundler";
 import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
+import { queueGate, type Lane } from "../services/jobQueue";
 
-let currentJobId: string | null = null;
+// Two compressors (services/jobQueue.ts): "main" takes the next job of any size,
+// "fast" only small ones, so one huge bundle can't hold up everyone behind it.
+const LANES: Lane[] = ["main", "fast"];
+const currentJobIds: Record<Lane, string | null> = { main: null, fast: null };
 let running = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
+const timers: Record<Lane, ReturnType<typeof setTimeout> | null> = { main: null, fast: null };
 
 export function isCompressorRunning(): boolean {
   return running;
 }
 
 export function getCompressorJobId(): string | null {
-  return currentJobId;
+  return currentJobIds.main ?? currentJobIds.fast;
 }
 
-export async function processNextCompression(): Promise<boolean> {
+export function getCompressorJobIds(): Record<Lane, string | null> {
+  return { ...currentJobIds };
+}
+
+export async function processNextCompression(lane: Lane = "main"): Promise<boolean> {
+  if (!(await queueGate())) return false;
   const job = await Job.findOneAndUpdate(
-    { status: "pending" },
+    lane === "fast" ? { status: "pending", lane: "fast" } : { status: "pending" },
     { $set: { status: "processing", startedAt: new Date(), phaseStartedAt: new Date() } },
     { sort: { priority: 1, createdAt: 1 }, new: true }
   );
@@ -30,7 +39,7 @@ export async function processNextCompression(): Promise<boolean> {
   if (!job) return false;
 
   const jobId = job._id.toString();
-  currentJobId = jobId;
+  currentJobIds[lane] = jobId;
   const jobStartTime = Date.now();
   const jobTimeoutMs = config.jobTimeoutMinutes * 60 * 1000;
 
@@ -167,7 +176,7 @@ export async function processNextCompression(): Promise<boolean> {
 
     console.error(`Job ${jobId} compression failed:`, rawMsg);
   } finally {
-    currentJobId = null;
+    currentJobIds[lane] = null;
   }
 
   return true;
@@ -175,27 +184,28 @@ export async function processNextCompression(): Promise<boolean> {
 
 export function startCompressor(intervalMs = 5000): void {
   running = true;
-  console.log("Compressor worker started");
+  console.log("Compressor workers started (main + fast lanes)");
 
-  const tick = async () => {
-    if (!running) return;
-    try {
-      const hadWork = await processNextCompression();
-      if (running) timer = setTimeout(tick, hadWork ? 500 : intervalMs);
-    } catch (err) {
-      console.error("Compressor error:", (err as Error).message);
-      if (running) timer = setTimeout(tick, intervalMs);
-    }
-  };
-
-  tick();
+  for (const lane of LANES) {
+    const tick = async () => {
+      if (!running) return;
+      try {
+        const hadWork = await processNextCompression(lane);
+        if (running) timers[lane] = setTimeout(tick, hadWork ? 500 : intervalMs);
+      } catch (err) {
+        console.error(`Compressor (${lane}) error:`, (err as Error).message);
+        if (running) timers[lane] = setTimeout(tick, intervalMs);
+      }
+    };
+    tick();
+  }
 }
 
 export function stopCompressor(): void {
   running = false;
-  if (timer) {
-    clearTimeout(timer);
-    timer = null;
+  for (const lane of LANES) {
+    if (timers[lane]) clearTimeout(timers[lane]!);
+    timers[lane] = null;
   }
-  console.log("Compressor worker stopped");
+  console.log("Compressor workers stopped");
 }

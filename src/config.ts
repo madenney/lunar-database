@@ -25,7 +25,19 @@ export const config = {
   // Job settings
   jobTempDir: process.env.JOB_TEMP_DIR || "/var/lib/lm-database/temp",
   jobMaxConcurrentPerClient: parseInt(process.env.JOB_MAX_CONCURRENT_PER_CLIENT || "3", 10),
-  jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "50", 10),
+  jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "200", 10),
+  // Launch-load shaping (services/jobQueue.ts). Bundles estimated at or under
+  // fastLaneMaxMb also go to a second worker pair, so a huge job never blocks
+  // small ones. A single job may not exceed jobMaxBundleMb (point people at the
+  // full-DB download instead). An identical request within jobReuseHours joins
+  // the existing job or gets its finished bundle instead of building another.
+  fastLaneMaxMb: parseInt(process.env.JOB_FAST_LANE_MAX_MB || "1024", 10),
+  jobMaxBundleMb: parseInt(process.env.JOB_MAX_BUNDLE_MB || "20480", 10),
+  jobReuseHours: parseInt(process.env.JOB_REUSE_HOURS || "48", 10),
+  /** Upload retries for transient network/TLS errors before a job fails. */
+  jobUploadMaxAttempts: parseInt(process.env.JOB_UPLOAD_MAX_ATTEMPTS || "3", 10),
+  /** Alert when bundle bytes uploaded + downloaded in 24 h pass this (0 = off). Early warning before the storage provider's daily caps. */
+  storageDailyAlertGb: parseInt(process.env.STORAGE_DAILY_ALERT_GB || "0", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly

@@ -1,34 +1,41 @@
 import path from "path";
 import { Job } from "../models/Job";
-import { uploadToStorage, deleteFromStorage } from "../services/storage";
+import { uploadToStorage, deleteFromStorage, classifyStorageError } from "../services/storage";
 import { cleanupJobTemp } from "../services/bundler";
 import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
+import { queueGate, pauseForStorageCap, type Lane } from "../services/jobQueue";
 
-let currentJobId: string | null = null;
+// Two uploaders, mirroring the compressor lanes (services/jobQueue.ts).
+const LANES: Lane[] = ["main", "fast"];
+const currentJobIds: Record<Lane, string | null> = { main: null, fast: null };
 let running = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
+const timers: Record<Lane, ReturnType<typeof setTimeout> | null> = { main: null, fast: null };
+
+/** Network/TLS failures worth retrying (seen in production: EPROTO, ENETUNREACH, resets). */
+const TRANSIENT = /EPROTO|ENETUNREACH|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|EPIPE|timed? ?out/i;
 
 export function isUploaderRunning(): boolean {
   return running;
 }
 
 export function getUploaderJobId(): string | null {
-  return currentJobId;
+  return currentJobIds.main ?? currentJobIds.fast;
 }
 
-export async function processNextUpload(): Promise<boolean> {
+export async function processNextUpload(lane: Lane = "main"): Promise<boolean> {
+  if (!(await queueGate())) return false;
   const job = await Job.findOneAndUpdate(
-    { status: "bundled" },
-    { $set: { status: "uploading", phaseStartedAt: new Date() } },
+    lane === "fast" ? { status: "bundled", lane: "fast" } : { status: "bundled" },
+    { $set: { status: "uploading", phaseStartedAt: new Date() }, $inc: { uploadAttempts: 1 } },
     { sort: { priority: 1, createdAt: 1 }, new: true }
   );
 
   if (!job) return false;
 
   const jobId = job._id.toString();
-  currentJobId = jobId;
+  currentJobIds[lane] = jobId;
   const jobStartTime = Date.now();
   const jobTimeoutMs = config.jobTimeoutMinutes * 60 * 1000;
 
@@ -103,6 +110,19 @@ export async function processNextUpload(): Promise<boolean> {
     );
   } catch (err) {
     const rawMsg = (err as Error).message;
+    // A storage cap or a network blip isn't the job's fault: keep the bundle and
+    // put the job back in line (pausing uploads for a cap) instead of failing it.
+    const cap = classifyStorageError(err) === "cap";
+    const retry = cap || (TRANSIENT.test(rawMsg) && (job.uploadAttempts ?? 1) < config.jobUploadMaxAttempts);
+    if (retry) {
+      const requeued = await Job.updateOne({ _id: jobId, status: "uploading" }, { status: "bundled", progress: null }).catch(() => null);
+      if (requeued?.matchedCount) {
+        if (cap) await pauseForStorageCap(`Upload of job ${jobId} refused: ${rawMsg}`);
+        console.error(`Job ${jobId} upload ${cap ? "hit the storage cap" : "failed (will retry)"}:`, rawMsg);
+        if (!cap && process.env.NODE_ENV !== "test") await new Promise((r) => setTimeout(r, 15_000));
+        return true;
+      }
+    }
     const safeMsg = sanitizeJobErrorMessage(rawMsg);
     // Mark failed only if still uploading — never clobber a cancel/complete that
     // already landed (M1).
@@ -117,7 +137,7 @@ export async function processNextUpload(): Promise<boolean> {
 
     console.error(`Job ${jobId} upload failed:`, (err as Error).message);
   } finally {
-    currentJobId = null;
+    currentJobIds[lane] = null;
   }
 
   return true;
@@ -125,27 +145,28 @@ export async function processNextUpload(): Promise<boolean> {
 
 export function startUploader(intervalMs = 5000): void {
   running = true;
-  console.log("Uploader worker started");
+  console.log("Uploader workers started (main + fast lanes)");
 
-  const tick = async () => {
-    if (!running) return;
-    try {
-      const hadWork = await processNextUpload();
-      if (running) timer = setTimeout(tick, hadWork ? 500 : intervalMs);
-    } catch (err) {
-      console.error("Uploader error:", (err as Error).message);
-      if (running) timer = setTimeout(tick, intervalMs);
-    }
-  };
-
-  tick();
+  for (const lane of LANES) {
+    const tick = async () => {
+      if (!running) return;
+      try {
+        const hadWork = await processNextUpload(lane);
+        if (running) timers[lane] = setTimeout(tick, hadWork ? 500 : intervalMs);
+      } catch (err) {
+        console.error(`Uploader (${lane}) error:`, (err as Error).message);
+        if (running) timers[lane] = setTimeout(tick, intervalMs);
+      }
+    };
+    tick();
+  }
 }
 
 export function stopUploader(): void {
   running = false;
-  if (timer) {
-    clearTimeout(timer);
-    timer = null;
+  for (const lane of LANES) {
+    if (timers[lane]) clearTimeout(timers[lane]!);
+    timers[lane] = null;
   }
-  console.log("Uploader worker stopped");
+  console.log("Uploader workers stopped");
 }

@@ -602,6 +602,91 @@ describe("POST /api/jobs", () => {
   });
 });
 
+describe("download queue: reuse, sharing, size cap, public queue", () => {
+  const A = { "X-Client-Id": "a1a1a1a1-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const B = { "X-Client-Id": "b2b2b2b2-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const seed = () =>
+    Replay.create({ filePath: "/test/q.slp", fileHash: "q", fileSize: 100000, players: [{ playerIndex: 0, connectCode: "Q#1", characterId: 2, characterName: "Fox" }] });
+
+  it("gives a second identical request the same job and lets both follow it", async () => {
+    await seed();
+    const first = await post("/api/jobs", { p1ConnectCode: "Q#1", p1CharacterId: "2" }, A);
+    expect(first.status).toBe(201);
+    expect(first.body.lane).toBe("fast");
+    // Same filter, values in another order: same bundle.
+    const second = await post("/api/jobs", { p1CharacterId: "2", p1ConnectCode: "Q#1" }, B);
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ jobId: first.body.jobId, reused: true });
+    expect(await Job.countDocuments()).toBe(1);
+
+    expect((await get("/api/jobs", B)).body.jobs.map((j: any) => String(j._id))).toEqual([String(first.body.jobId)]);
+    const status = await get(`/api/jobs/${first.body.jobId}`, B);
+    expect(status.status).toBe(200);
+    expect(status.body.sharedWith).toBe(1);
+  });
+
+  it("hands a shared job to a follower when its creator cancels, and lets followers leave", async () => {
+    const job = await Job.create({ filter: { p1ConnectCode: "Q#1" }, createdBy: A["X-Client-Id"], followers: [B["X-Client-Id"]] });
+    expect((await del(`/api/jobs/${job._id}`, A)).status).toBe(200);
+    let after = await Job.findById(job._id).lean();
+    expect(after).toMatchObject({ status: "pending", createdBy: B["X-Client-Id"], followers: [] });
+    expect((await del(`/api/jobs/${job._id}`, B)).status).toBe(200);
+    after = await Job.findById(job._id).lean();
+    expect(after!.status).toBe("cancelled");
+  });
+
+  it("reuses a finished bundle that is still in storage", async () => {
+    await seed();
+    const done = await Job.create({
+      filter: { p1ConnectCode: "Q#1" }, filterKey: "p1ConnectCode=Q#1", status: "completed", r2Key: "jobs/q.zip", completedAt: new Date(), createdBy: A["X-Client-Id"],
+    });
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "Q#1" }, B);
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ jobId: String(done._id), status: "completed", reused: true });
+  });
+
+  it("refuses a bundle over the size cap", async () => {
+    // 200 GB raw is ~25 GB of bundle, over the 20 GB default.
+    await Replay.create({ filePath: "/test/big.slp", fileHash: "big", fileSize: 200 * 1024 ** 3, players: [{ playerIndex: 0, connectCode: "BIG#1", characterId: 2, characterName: "Fox" }] });
+    const { status, body } = await post("/api/jobs", { p1ConnectCode: "BIG#1" }, A);
+    expect(status).toBe(400);
+    expect(body.code).toBe("too_large");
+    expect(body.maxBytes).toBe(20480 * 1024 * 1024);
+    const est = await post("/api/replays/estimate", { p1ConnectCode: "BIG#1" }, A);
+    expect(est.body.queue).toMatchObject({ tooLarge: true, lane: "main" });
+  });
+
+  it("forecasts a new download in the estimate and points at an identical one", async () => {
+    await seed();
+    const est = await post("/api/replays/estimate", { p1ConnectCode: "Q#1" }, A);
+    expect(est.body.queue).toMatchObject({ reusable: null, tooLarge: false, lane: "fast", ahead: 0, paused: null });
+    const job = await post("/api/jobs", { p1ConnectCode: "Q#1" }, A);
+    const again = await post("/api/replays/estimate", { p1ConnectCode: "Q#1" }, B);
+    expect(again.body.queue.reusable).toEqual({ jobId: String(job.body.jobId), status: "pending" });
+  });
+
+  it("publishes the queue without saying who asked, marking only the caller's jobs", async () => {
+    await Job.create({ filter: { p1ConnectCode: "Q#1" }, createdBy: A["X-Client-Id"], estimatedSize: 8_000_000, status: "bundling" });
+    await Job.create({ filter: { stageId: "31" }, createdBy: B["X-Client-Id"], estimatedSize: 8_000_000 });
+    await Job.create({ filter: { stageId: "32" }, createdBy: A["X-Client-Id"], status: "completed", r2Key: "jobs/r.zip", bundleSize: 5, completedAt: new Date() });
+    const { status, body } = await get("/api/jobs/queue", B);
+    expect(status).toBe(200);
+    expect(body.running).toHaveLength(1);
+    expect(body.waiting).toHaveLength(1);
+    expect(body.waiting[0]).toMatchObject({ position: 1, mine: true, filter: { stageId: "31" } });
+    expect(body.running[0].mine).toBe(false);
+    expect(body.recent).toHaveLength(1);
+    expect(body.recent[0].expiresAt).toBeTruthy();
+    expect(JSON.stringify(body)).not.toMatch(/createdBy|followers|a1a1a1a1|b2b2b2b2/);
+  });
+
+  it("lets anyone download a finished bundle", async () => {
+    const job = await Job.create({ filter: { p1ConnectCode: "Q#1" }, status: "completed", r2Key: "jobs/q.zip", createdBy: A["X-Client-Id"] });
+    const { body } = await get(`/api/jobs/${job._id}/download`, B);
+    expect(body.code).not.toBe("forbidden");
+  });
+});
+
 describe("GET /api/jobs", () => {
   it("requires X-Client-Id header", async () => {
     const { status, body } = await get("/api/jobs");
@@ -710,24 +795,30 @@ describe("GET /api/jobs/:id", () => {
   it("returns queuePosition and ETAs for pending jobs", async () => {
     // Explicit, distinct createdAt so queue ordering is deterministic — created
     // back-to-back these can share a millisecond and tie the "jobs ahead" count.
-    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:00.000Z") });
-    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:01.000Z") });
+    // No finished jobs to measure, so the rate is ESTIMATE_UPLOAD_SPEED_MBPS
+    // (default 10 Mbps = 1.25 MB/s): 75 MB of bundle (600 MB raw) = 60 s.
+    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, estimatedSize: 600_000_000, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:00.000Z") });
+    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, estimatedSize: 300_000_000, createdBy: TEST_CLIENT_ID, createdAt: new Date("2026-01-01T00:00:01.000Z") });
 
     // job1 is first (created earlier), job2 is second
     const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body1.queuePosition).toBe(1);
     expect(body1.estimatedWaitSec).toBe(0); // nothing ahead
+    expect(body1.estimatedProcessingTimeSec).toBe(60);
 
     const { body: body2 } = await get(`/api/jobs/${job2._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body2.queuePosition).toBe(2);
     expect(body2.estimatedWaitSec).toBe(60); // job1 ahead
+    expect(body2.estimatedProcessingTimeSec).toBe(30);
   });
 
   it("returns queuePosition 0 for active job", async () => {
+    // 125 MB of bundle = 100 s at 1.25 MB/s. Bundling is the first half of the
+    // work, so half the files bundled = a quarter done: 75 s left.
     const job = await Job.create({
       filter: { p1ConnectCode: "X#1" },
       status: "bundling",
-      estimatedProcessingTime: 100,
+      estimatedSize: 1_000_000_000,
       progress: { step: "bundling", filesProcessed: 50, filesTotal: 100 },
       createdBy: TEST_CLIENT_ID,
     });
@@ -735,7 +826,7 @@ describe("GET /api/jobs/:id", () => {
     const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.queuePosition).toBe(0);
     expect(body.estimatedWaitSec).toBe(0);
-    expect(body.estimatedProcessingTimeSec).toBe(50); // 50% done, 100 * 0.5
+    expect(body.estimatedProcessingTimeSec).toBe(75);
   });
 
   it("returns queuePosition 0 for bundled job", async () => {
@@ -762,8 +853,9 @@ describe("GET /api/jobs/:id", () => {
 
   it("priority affects queue ordering", async () => {
     // Create job1 first but with higher priority number (lower priority)
-    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, priority: 5, estimatedProcessingTime: 60, createdBy: TEST_CLIENT_ID });
-    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, priority: 0, estimatedProcessingTime: 30, createdBy: TEST_CLIENT_ID });
+    // Sizes as in the ETA test above: 600 MB raw = 60 s, 300 MB raw = 30 s.
+    const job1 = await Job.create({ filter: { p1ConnectCode: "X#1" }, priority: 5, estimatedSize: 600_000_000, createdBy: TEST_CLIENT_ID });
+    const job2 = await Job.create({ filter: { p1ConnectCode: "Y#1" }, priority: 0, estimatedSize: 300_000_000, createdBy: TEST_CLIENT_ID });
 
     // job2 has lower priority number = processed first
     const { body: body2 } = await get(`/api/jobs/${job2._id}`, { "X-Client-Id": TEST_CLIENT_ID });

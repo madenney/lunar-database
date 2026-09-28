@@ -5,6 +5,7 @@ import { Replay } from "../models/Replay";
 import { GameStats } from "../models/GameStats";
 import { loadGameEvents } from "../services/gameDetail";
 import { resolveSelection, ReplaySearchParams } from "../services/replaySearchQuery";
+import { filterKey, findReusableJob, forecastNewJob, getQueueState, pauseMessage } from "../services/jobQueue";
 import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
 import { sendApiError } from "../utils/apiErrors";
 import { config } from "../config";
@@ -93,6 +94,15 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
     const { count, rawSize, totalDurationFrames } = await queryCountAndSize(params, { includeDuration: true });
     const estimates = calculateEstimates(count, rawSize);
 
+    // What happens if they click download now: an identical bundle to share, too
+    // big for one bundle, or a forecast of when theirs would be ready.
+    const [reusable, forecast, state] = await Promise.all([
+      findReusableJob(filterKey(params as Record<string, unknown>)),
+      forecastNewJob(estimates.estimatedZipSize),
+      getQueueState(),
+    ]);
+    const maxBytes = config.jobMaxBundleMb * 1024 * 1024;
+
     const clientId = req.headers["x-client-id"] as string | undefined;
     SearchEvent.create({
       type: "estimate",
@@ -109,6 +119,16 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
       estimatedZipSize: estimates.estimatedZipSize,
       estimatedTimeSec: estimates.estimatedProcessingTimeSec,
       totalDurationFrames,
+      queue: {
+        reusable: reusable ? { jobId: reusable._id, status: reusable.status } : null,
+        tooLarge: estimates.estimatedZipSize > maxBytes,
+        maxBytes,
+        lane: forecast.lane,
+        ahead: forecast.ahead,
+        startSec: forecast.startSec,
+        readySec: forecast.readySec,
+        paused: pauseMessage(state),
+      },
     });
   } catch (err) {
     sendError(res, err);

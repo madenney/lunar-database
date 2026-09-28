@@ -12,6 +12,10 @@ import { resolveSelection } from "../services/replaySearchQuery";
 import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
 import { Replay } from "../models/Replay";
 import { SAFE_JOB_ERROR_MESSAGES } from "../utils/sanitizeError";
+import {
+  filterKey, findReusableJob, bundleBytes, laneFor, queueSnapshot, forecastNewJob,
+  getQueueState, pauseMessage,
+} from "../services/jobQueue";
 
 const router = Router();
 
@@ -84,6 +88,18 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
       return;
     }
 
+    // Someone already asked for exactly this: share their job (or its finished
+    // bundle) instead of building the same thing again.
+    const key = filterKey(filter as Record<string, unknown>);
+    const existing = await findReusableJob(key);
+    if (existing) {
+      if (existing.createdBy !== clientId) {
+        await Job.updateOne({ _id: existing._id }, { $addToSet: { followers: clientId } });
+      }
+      res.status(200).json({ jobId: existing._id, status: existing.status, reused: true });
+      return;
+    }
+
     const { count, rawSize } = await queryCountAndSize(filter);
 
     if (count === 0) {
@@ -106,14 +122,25 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
       }
     }
 
-    // Global queue depth limit
-    const pendingCount = await Job.countDocuments({ status: "pending" });
-    if (pendingCount >= config.jobMaxPendingTotal) {
-      sendApiError(res, 429, "queue_full");
+    const estimates = calculateEstimates(count, rawSize);
+
+    // One bundle may not be bigger than jobMaxBundleMb: past that, the full-DB
+    // download (or a narrower filter) is the right tool.
+    const maxBytes = config.jobMaxBundleMb * 1024 * 1024;
+    if (estimates.estimatedZipSize > maxBytes) {
+      sendApiError(res, 400, "too_large", { estimatedBytes: estimates.estimatedZipSize, maxBytes });
       return;
     }
 
-    const estimates = calculateEstimates(count, rawSize);
+    // Global queue depth limit
+    const pendingCount = await Job.countDocuments({ status: "pending" });
+    if (pendingCount >= config.jobMaxPendingTotal) {
+      const snap = await queueSnapshot();
+      let workSec = 0;
+      for (const f of snap.forecast.values()) workSec = Math.max(workSec, f.readySec);
+      sendApiError(res, 429, "queue_full", { pending: pendingCount, workSec });
+      return;
+    }
 
     // When a file/size cap is set, `count` is already capped. Get the uncapped
     // total so we can tell the user their bundle was trimmed — but only when a real
@@ -127,6 +154,8 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
 
     const job = await Job.create({
       filter,
+      filterKey: key || null,
+      lane: laneFor(estimates.estimatedZipSize),
       createdBy: clientId || null,
       replayCount: count,
       totalMatched,
@@ -134,7 +163,7 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
       estimatedProcessingTime: estimates.estimatedProcessingTimeSec,
     });
 
-    res.status(201).json({ jobId: job._id, status: job.status });
+    res.status(201).json({ jobId: job._id, status: job.status, reused: false, lane: job.lane });
   } catch (err) {
     sendError(res, err);
   }
@@ -156,7 +185,7 @@ router.get("/", jobListLimiter, async (req: Request, res: Response) => {
     const limitNum = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 20;
     const skip = Math.min((pageNum - 1) * limitNum, 10000);
 
-    const query = { createdBy: clientId };
+    const query = { $or: [{ createdBy: clientId }, { followers: clientId }] };
     const [jobs, total] = await Promise.all([
       Job.find(query)
         .sort({ createdAt: -1 })
@@ -217,12 +246,103 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
   }
 });
 
+const queueLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many requests, please try again later" },
+});
+
+let recentCache: { at: number; jobs: any[] } | null = null;
+
+/** Finished bundles still in storage, newest first (cached briefly). */
+async function recentBundles() {
+  if (process.env.NODE_ENV !== "test" && recentCache && Date.now() - recentCache.at < 15_000) return recentCache.jobs;
+  const cutoff = new Date(Date.now() - config.storageCleanupAfterDays * 86400 * 1000);
+  const jobs = await Job.find({
+    status: "completed",
+    r2Key: { $ne: null },
+    isFullDb: { $ne: true },
+    $or: [{ pinned: true }, { lastDownloadedAt: { $gte: cutoff } }, { lastDownloadedAt: null, completedAt: { $gte: cutoff } }],
+  })
+    .sort({ completedAt: -1 })
+    .limit(60)
+    .select("filter replayCount bundleSize completedAt lastDownloadedAt downloadCount pinned createdBy followers")
+    .lean();
+  recentCache = { at: Date.now(), jobs };
+  return jobs;
+}
+
+// GET /api/jobs/queue — the public download queue: what's being built, what's
+// waiting (with forecasts), and recent bundles anyone can download right now.
+// Never exposes who asked for what; `mine` only marks the caller's own jobs.
+router.get("/queue", queueLimiter, async (req: Request, res: Response) => {
+  try {
+    const clientId = req.headers["x-client-id"] as string | undefined;
+    const mine = (j: any) => !!clientId && (j.createdBy === clientId || (j.followers ?? []).includes(clientId));
+    const [snap, state, recent] = await Promise.all([queueSnapshot(), getQueueState(), recentBundles()]);
+    let workSec = 0;
+    for (const f of snap.forecast.values()) workSec = Math.max(workSec, f.readySec);
+    const shared = (j: any) => (j.followers ?? []).length + 1;
+    const pct = (j: any) => {
+      const p = j.progress;
+      if (!p) return j.status === "bundled" ? 50 : 0;
+      if (p.step === "uploading" && p.bytesTotal) return Math.round(50 + 50 * ((p.bytesUploaded ?? 0) / p.bytesTotal));
+      return p.filesTotal ? Math.round(50 * (p.filesProcessed / p.filesTotal)) : 0;
+    };
+    const cleanupMs = config.storageCleanupAfterDays * 86400 * 1000;
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      paused: pauseMessage(state),
+      throughputBps: Math.round(snap.bps),
+      workSec,
+      running: snap.running.map((j) => ({
+        id: j._id, filter: j.filter, replayCount: j.replayCount, bytes: bundleBytes(j), status: j.status, lane: j.lane,
+        progressPct: pct(j), readySec: snap.forecast.get(String(j._id))?.readySec ?? null, shared: shared(j), mine: mine(j),
+      })),
+      waiting: snap.pending.slice(0, 300).map((j, i) => {
+        const f = snap.forecast.get(String(j._id));
+        return {
+          id: j._id, filter: j.filter, replayCount: j.replayCount, bytes: bundleBytes(j), lane: j.lane, position: i + 1,
+          startSec: f?.startSec ?? null, readySec: f?.readySec ?? null, shared: shared(j), mine: mine(j),
+        };
+      }),
+      waitingTotal: snap.pending.length,
+      recent: recent.map((j) => ({
+        id: j._id, filter: j.filter, replayCount: j.replayCount, bundleSize: j.bundleSize, completedAt: j.completedAt,
+        downloadCount: j.downloadCount, pinned: !!j.pinned, mine: mine(j),
+        expiresAt: j.pinned ? null : new Date(((j.lastDownloadedAt ?? j.completedAt) as Date).getTime() + cleanupMs),
+      })),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // DELETE /api/jobs/:id — user cancels own job (must match createdBy, only pending/processing)
 router.delete("/:id", jobDeleteLimiter, async (req: Request, res: Response) => {
   try {
     const clientId = req.headers["x-client-id"] as string | undefined;
     if (!clientId) {
       sendApiError(res, 400, "invalid_client");
+      return;
+    }
+
+    // A follower leaving a shared job just stops following it.
+    const left = await Job.updateOne({ _id: req.params.id, followers: clientId }, { $pull: { followers: clientId } });
+    if (left.modifiedCount) {
+      res.json({ message: "Job cancelled" });
+      return;
+    }
+
+    // The creator of a shared job hands it to the next follower instead of
+    // cancelling it for everyone.
+    const handed = await Job.findOneAndUpdate(
+      { _id: req.params.id, createdBy: clientId, status: { $in: ACTIVE_JOB_STATUSES }, "followers.0": { $exists: true } },
+      [{ $set: { createdBy: { $first: "$followers" }, followers: { $slice: ["$followers", 1, 100000] } } }],
+      { updatePipeline: true },
+    );
+    if (handed) {
+      res.json({ message: "Job cancelled" });
       return;
     }
 
@@ -259,9 +379,9 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    // Ownership check — require matching clientId
+    // Ownership check — the creator or anyone sharing the job
     const clientId = req.headers["x-client-id"] as string | undefined;
-    if (!clientId || job.createdBy !== clientId) {
+    if (!clientId || (job.createdBy !== clientId && !(job.followers ?? []).includes(clientId))) {
       sendApiError(res, 403, "forbidden");
       return;
     }
@@ -270,59 +390,17 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
     let estimatedWaitSec: number | null = null;
     let estimatedProcessingTimeSec: number | null = null;
 
-    if (job.status === "pending") {
-      // Count jobs ahead in queue (lower priority first, then earlier createdAt)
-      const aheadCount = await Job.countDocuments({
-        status: "pending",
-        $or: [
-          { priority: { $lt: job.priority } },
-          { priority: job.priority, createdAt: { $lt: job.createdAt } },
-        ],
-      });
-
-      // Sum estimated processing time of jobs ahead
-      const aheadAgg = await Job.aggregate([
-        {
-          $match: {
-            status: "pending",
-            $or: [
-              { priority: { $lt: job.priority } },
-              { priority: job.priority, createdAt: { $lt: job.createdAt } },
-            ],
-          },
-        },
-        { $group: { _id: null, totalTime: { $sum: "$estimatedProcessingTime" } } },
-      ]);
-
-      queuePosition = aheadCount + 1;
-      let waitSec = aheadAgg[0]?.totalTime ?? 0;
-
-      // Check for a currently-active job and add its remaining time
-      const activeJob = await Job.findOne({
-        status: { $in: ["processing", "bundling", "uploading"] },
-      }).select("estimatedProcessingTime progress").lean();
-
-      if (activeJob) {
-        const ept = activeJob.estimatedProcessingTime ?? 0;
-        if (activeJob.progress && activeJob.progress.filesTotal > 0) {
-          const fractionDone = activeJob.progress.filesProcessed / activeJob.progress.filesTotal;
-          waitSec += Math.round(ept * (1 - fractionDone));
-        } else {
-          waitSec += ept;
-        }
-      }
-
-      estimatedWaitSec = waitSec;
-      estimatedProcessingTimeSec = job.estimatedProcessingTime;
-    } else if (["processing", "bundling", "bundled", "uploading"].includes(job.status)) {
-      queuePosition = 0;
-      estimatedWaitSec = 0;
-      const ept = job.estimatedProcessingTime ?? 0;
-      if (job.progress && job.progress.filesTotal > 0) {
-        const fractionDone = job.progress.filesProcessed / job.progress.filesTotal;
-        estimatedProcessingTimeSec = Math.round(ept * (1 - fractionDone));
+    if (job.status === "pending" || ["processing", "bundling", "bundled", "uploading"].includes(job.status)) {
+      // Forecast from a simulation of both worker lanes at the measured rate.
+      const f = (await queueSnapshot()).forecast.get(String(job._id));
+      if (job.status === "pending") {
+        queuePosition = (f?.ahead ?? 0) + 1;
+        estimatedWaitSec = f?.startSec ?? null;
+        estimatedProcessingTimeSec = f ? Math.max(0, f.readySec - f.startSec) : job.estimatedProcessingTime;
       } else {
-        estimatedProcessingTimeSec = ept;
+        queuePosition = 0;
+        estimatedWaitSec = 0;
+        estimatedProcessingTimeSec = f?.readySec ?? job.estimatedProcessingTime;
       }
     }
     // Terminal statuses: all remain null
@@ -353,6 +431,10 @@ router.get("/:id", jobStatusLimiter, async (req: Request, res: Response) => {
       queuePosition,
       estimatedWaitSec,
       estimatedProcessingTimeSec,
+      lane: job.lane,
+      /** How many other people are waiting on this same bundle. */
+      sharedWith: (job.followers ?? []).filter((f) => f !== clientId).length + (job.createdBy && job.createdBy !== clientId ? 1 : 0),
+      paused: pauseMessage(await getQueueState()),
       lastDownloadedAt: job.lastDownloadedAt,
       startedAt: job.startedAt,
       createdAt: job.createdAt,
@@ -373,13 +455,9 @@ router.get("/:id/download", jobDownloadLimiter, async (req: Request, res: Respon
       return;
     }
 
-    // Ownership check — require matching clientId, EXCEPT for pinned bundles,
-    // which are a public catalog ("Popular Downloads") any visitor may download.
+    // Any finished bundle is downloadable by anyone: the queue page lists recent
+    // bundles so people can grab one instead of queueing the same thing again.
     const clientId = req.headers["x-client-id"] as string | undefined;
-    if (!job.pinned && (!clientId || job.createdBy !== clientId)) {
-      sendApiError(res, 403, "forbidden");
-      return;
-    }
 
     if (job.status !== "completed" || !job.r2Key) {
       sendApiError(res, 400, "not_ready");

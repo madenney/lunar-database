@@ -277,6 +277,21 @@ View the current job processing queue — the active jobs and all pending jobs i
 
 ---
 
+### Pause / Resume Downloads
+
+```
+GET  /api/admin/queue/state
+POST /api/admin/queue/pause   { "message"?: string }
+POST /api/admin/queue/resume
+```
+
+While paused, the compressor and uploader lanes claim no jobs; queued jobs keep
+their place and users see `message` (or a default notice) in the queue, their job
+status and the download estimate. The queue also pauses itself: `storage_offline`
+when the replay archive isn't accessible (resumes by itself when it is back) and
+`storage_cap` when storage refuses an upload for a cap (the job keeps its bundle;
+resume after raising the cap). Each auto-pause sends an alert email.
+
 ### Reorder Queue
 
 ```

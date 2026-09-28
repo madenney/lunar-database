@@ -30,8 +30,10 @@ export const API_ERROR_CODES = {
   rate_limited: "Too many requests, please try again later",
   /** 429: the client already has the maximum number of active jobs. Extra: limit. */
   too_many_active_jobs: "Too many active jobs",
-  /** 429: the global pending queue is full. */
+  /** 429: the global pending queue is full. Extra: pending, workSec (seconds of queued work). */
   queue_full: "The job queue is full, try again later",
+  /** 400: the bundle would exceed the per-download size cap. Extra: estimatedBytes, maxBytes. */
+  too_large: "This download is too large for one bundle",
   /** 429: full-database download limit. Extra: retryAfterSeconds (+ Retry-After header). */
   fulldb_rate_limited: "Full database download limit reached",
   /** 503: storage provider's daily download cap is exhausted. */

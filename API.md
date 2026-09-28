@@ -293,9 +293,24 @@ All fields are optional. Values are comma-separated strings (same format as the 
   "estimatedSlpzSize": 10485760,
   "estimatedZipSize": 10836352,
   "estimatedTimeSec": 45,
-  "totalDurationFrames": 2160000
+  "totalDurationFrames": 2160000,
+  "queue": {
+    "reusable": null,
+    "tooLarge": false,
+    "maxBytes": 21474836480,
+    "lane": "fast",
+    "ahead": 3,
+    "startSec": 240,
+    "readySec": 262,
+    "paused": null
+  }
 }
 ```
+
+`queue` says what creating this job now would do: `reusable` (`{ jobId, status }`
+of an identical job it would share), `tooLarge` (over `maxBytes`), or a forecast
+(`ahead` jobs start first; ready in `readySec`). `paused` is the user-facing
+reason when downloads are paused.
 
 | Field | Type | Description |
 |---|---|---|
@@ -348,15 +363,45 @@ The server stores `replayCount`, `totalMatched` (uncapped match count, when a li
 ```json
 {
   "jobId": "6651a...",
-  "status": "pending"
+  "status": "pending",
+  "reused": false,
+  "lane": "fast"
 }
 ```
 
-**Response** `400` — `invalid_client`, `filter_required`, or `no_matches`.
+`lane` is `fast` for bundles up to `JOB_FAST_LANE_MAX_MB` (1 GB): a second worker
+pair serves only those, so a huge job never blocks small ones.
+
+**Response** `200` — `{ jobId, status, reused: true }`: an identical request (same
+filter, list values in any order) is already queued, or finished within
+`JOB_REUSE_HOURS` and still in storage. The caller follows that job instead of
+creating another: it appears in their job list, they can poll it, and cancelling
+only unfollows it (a creator who cancels hands the job to a follower).
+
+**Response** `400` — `invalid_client`, `filter_required`, `no_matches`, or
+`too_large` (with `estimatedBytes`, `maxBytes`): the bundle would exceed
+`JOB_MAX_BUNDLE_MB` (20 GB).
 
 **Response** `429` — `too_many_active_jobs` (with `limit`) — Per-client concurrent job limit reached. Applies to jobs in `pending`, `processing`, `bundling`, `bundled`, or `uploading` status.
 
-**Response** `429` — `queue_full` — Global pending queue is at capacity.
+**Response** `429` — `queue_full` (with `pending`, `workSec`) — Global pending queue is at capacity (`JOB_MAX_PENDING_TOTAL`, 200).
+
+---
+
+### Download Queue
+
+```
+GET /api/jobs/queue
+```
+
+The public queue: `running` (being built, with `progressPct`, `readySec`),
+`waiting` (in order, with `position`, `startSec`, `readySec`, `lane`), `recent`
+finished bundles anyone can download (`expiresAt` null when pinned), plus
+`paused` (a user-facing reason, or null), `workSec` (until the queue clears),
+`throughputBps` (measured) and `waitingTotal`. Entries carry the job `filter`
+and `shared` (people waiting on it) but never who asked; `mine` marks the
+caller's own jobs when `X-Client-Id` is sent. Forecasts simulate both worker
+lanes sharing the uplink at the median rate of recent jobs.
 
 ---
 
@@ -588,7 +633,7 @@ if (progress.step === "bundling") {
 GET /api/jobs/:id/download
 ```
 
-Returns a presigned storage download URL, valid for 1 hour. The download is a `.zip` archive containing `.slpz` compressed replay files and a `lunar-manifest.json` mapping each file to its replay: `{ "version": 1, "replays": [{ "file": "12_Game_….slpz", "replayId": "…", "fileHash": "…" }] }` (see `src/services/bundleManifest.ts`). Entry names are unique per bundle only; `replayId` and `fileHash` identify a replay across bundles. Each download increments the job's `downloadCount`. Requires the owner's `X-Client-Id`, except for pinned bundles, which any visitor may download.
+Returns a presigned storage download URL, valid for 1 hour. The download is a `.zip` archive containing `.slpz` compressed replay files and a `lunar-manifest.json` mapping each file to its replay: `{ "version": 1, "replays": [{ "file": "12_Game_….slpz", "replayId": "…", "fileHash": "…" }] }` (see `src/services/bundleManifest.ts`). Entry names are unique per bundle only; `replayId` and `fileHash` identify a replay across bundles. Each download increments the job's `downloadCount`. Any visitor may download a finished bundle (the public queue lists recent ones so people can use them instead of queueing the same thing).
 
 **Query Parameters**
 
@@ -941,7 +986,12 @@ Job creation is subject to several safety limits to prevent runaway resource con
 | Limit | Default | Env Var | Description |
 |---|---|---|---|
 | Concurrent jobs per client | 3 | `JOB_MAX_CONCURRENT_PER_CLIENT` | Active (non-terminal) jobs per `X-Client-Id`. |
-| Total pending queue | 50 | `JOB_MAX_PENDING_TOTAL` | Max pending jobs across all clients. |
+| Total pending queue | 200 | `JOB_MAX_PENDING_TOTAL` | Max pending jobs across all clients. |
+| Largest bundle | 20 GB | `JOB_MAX_BUNDLE_MB` | Bigger selections are refused with `too_large`. |
+| Fast lane | 1 GB | `JOB_FAST_LANE_MAX_MB` | Bundles up to this size can also use the second worker pair. |
+| Reuse window | 48 h | `JOB_REUSE_HOURS` | An identical request within this window shares the existing job or bundle. |
+| Upload attempts | 3 | `JOB_UPLOAD_MAX_ATTEMPTS` | Network/TLS upload failures retry before the job fails; a storage cap pauses uploads instead. |
+| Storage traffic alert | off | `STORAGE_DAILY_ALERT_GB` | Email when bundle bytes uploaded + downloaded in 24 h pass this. |
 | Job timeout | 480 min | `JOB_TIMEOUT_MINUTES` | Jobs exceeding this are marked `failed`. |
 | slpz process timeout | 30 min | `SLPZ_TIMEOUT_MINUTES` | Compression subprocess timeout. |
 | Min free disk | 2,048 MB | `MIN_FREE_DISK_MB` | Jobs won't start if temp disk is below this threshold. |

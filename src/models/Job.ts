@@ -41,6 +41,14 @@ export interface IJob extends Document {
   status: JobStatus;
   filter: IJobFilter;
   createdBy: string | null;
+  /** Other clients who asked for the same bundle and share this job (see jobQueue.filterKey). */
+  followers: string[];
+  /** Canonical filter (jobQueue.filterKey): identical requests reuse this job. */
+  filterKey: string | null;
+  /** "fast" for small bundles (a second worker pair also serves them), else "main". */
+  lane: "fast" | "main";
+  /** Upload attempts so far; transient failures retry up to config.jobUploadMaxAttempts. */
+  uploadAttempts: number;
   priority: number;
   replayIds: mongoose.Types.ObjectId[];
   replayCount: number;
@@ -116,6 +124,10 @@ const JobSchema = new Schema<IJob>(
     },
     filter: { type: JobFilterSchema, default: {} },
     createdBy: { type: String, default: null },
+    followers: { type: [String], default: [] },
+    filterKey: { type: String, default: null },
+    lane: { type: String, enum: ["fast", "main"], default: "main" },
+    uploadAttempts: { type: Number, default: 0 },
     priority: { type: Number, default: 0 },
     replayIds: {
       type: [{ type: Schema.Types.ObjectId, ref: "Replay" }],
@@ -147,6 +159,8 @@ const JobSchema = new Schema<IJob>(
 
 JobSchema.index({ status: 1, priority: 1, createdAt: 1 });
 JobSchema.index({ createdBy: 1, createdAt: -1 });
+JobSchema.index({ followers: 1, createdAt: -1 });
+JobSchema.index({ filterKey: 1, status: 1 }, { partialFilterExpression: { filterKey: { $type: "string" } } });
 JobSchema.index({ status: 1, downloadCount: -1 });
 JobSchema.index({ status: 1, r2Key: 1, lastDownloadedAt: 1, completedAt: 1 });
 

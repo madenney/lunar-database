@@ -5,6 +5,7 @@ import { getTempDiskUsage } from "./bundler";
 import { isCompressorRunning } from "../workers/compressWorker";
 import { isUploaderRunning } from "../workers/uploadWorker";
 import { Job } from "../models/Job";
+import { DownloadEvent } from "../models/DownloadEvent";
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DISK_WARNING_MB = config.minFreeDiskMb * 2; // warn at 2x the hard limit
@@ -16,6 +17,7 @@ interface HealthState {
   stuckJob: string | null;
   workersCrashed: boolean;
   lastFailedJobId: string | null;
+  storageTrafficHigh: boolean;
 }
 
 const previous: HealthState = {
@@ -24,6 +26,7 @@ const previous: HealthState = {
   stuckJob: null,
   workersCrashed: false,
   lastFailedJobId: null,
+  storageTrafficHigh: false,
 };
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -94,7 +97,27 @@ async function checkHealth(): Promise<void> {
     previous.lastFailedJobId = failedId;
   } catch {}
 
-  // 5. Workers running check (only alert if both are down)
+  // 5. Storage traffic: bundle bytes uploaded + downloaded in the last 24 h,
+  // an early warning before the storage provider's daily caps stop downloads.
+  if (config.storageDailyAlertGb > 0) {
+    try {
+      const since = new Date(Date.now() - 24 * 3600 * 1000);
+      const [up, down] = await Promise.all([
+        Job.aggregate([{ $match: { completedAt: { $gte: since }, bundleSize: { $gt: 0 } } }, { $group: { _id: null, b: { $sum: "$bundleSize" } } }]),
+        DownloadEvent.aggregate([{ $match: { createdAt: { $gte: since }, bundleSize: { $gt: 0 } } }, { $group: { _id: null, b: { $sum: "$bundleSize" } } }]),
+      ]);
+      const gb = ((up[0]?.b ?? 0) + (down[0]?.b ?? 0)) / 1024 ** 3;
+      const high = gb >= config.storageDailyAlertGb;
+      if (high && !previous.storageTrafficHigh) {
+        alerts.push(`Storage traffic high: ${gb.toFixed(0)} GB uploaded+downloaded in 24 h (alert at ${config.storageDailyAlertGb} GB). Check the storage provider's caps.`);
+      } else if (!high && previous.storageTrafficHigh) {
+        recoveries.push(`Storage traffic back under ${config.storageDailyAlertGb} GB/24 h`);
+      }
+      previous.storageTrafficHigh = high;
+    } catch {}
+  }
+
+  // 6. Workers running check (only alert if both are down)
   const bothDown = !isCompressorRunning() && !isUploaderRunning();
   if (bothDown && !previous.workersCrashed) {
     // Check if there are pending jobs — only alert if there's work to do

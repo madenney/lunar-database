@@ -23,6 +23,7 @@ import { runHealthChecks } from "../services/healthCheck";
 import { parseFilter } from "../services/replayFilter";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { createRateLimiter } from "../utils/rateLimiter";
+import { getQueueState, setQueueState, pauseMessage } from "../services/jobQueue";
 
 const adminMutationLimiter = createRateLimiter({
   windowMs: 60 * 1000,
@@ -313,6 +314,37 @@ router.get("/jobs/queue", analyticsLimiter, async (_req: Request, res: Response)
     ]);
 
     res.json({ activeJobs, activeJob: activeJobs[0] ?? null, queue });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/queue/state — whether downloads are paused, and why.
+router.get("/queue/state", analyticsLimiter, async (_req: Request, res: Response) => {
+  try {
+    const state = await getQueueState(0);
+    res.json({ ...state, userMessage: pauseMessage(state) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/queue/pause { message? } — stop workers claiming jobs. Jobs stay
+// queued; users see the message (or a default maintenance notice).
+router.post("/queue/pause", adminMutationLimiter, async (req: Request, res: Response) => {
+  try {
+    const message = typeof req.body?.message === "string" && req.body.message.trim() ? req.body.message.trim().slice(0, 300) : null;
+    const state = await setQueueState(true, "manual", message);
+    res.json({ ...state, userMessage: pauseMessage(state) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/queue/resume — clear any pause (manual, storage cap or archive offline).
+router.post("/queue/resume", adminMutationLimiter, async (_req: Request, res: Response) => {
+  try {
+    res.json(await setQueueState(false, null));
   } catch (err) {
     sendError(res, err);
   }
