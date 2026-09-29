@@ -32,21 +32,30 @@ describe("buildReplaySearchQuery lists", () => {
 
 describe("buildReplaySearchQuery two-sided matchups", () => {
   const q = inner({ p1CharacterId: "2", p2CharacterId: "20" });
+  const [pairBranch, multiBranch] = q.$or;
 
-  it("requires both sides somewhere in the players array", () => {
-    expect(q.players).toEqual({
-      $all: [{ $elemMatch: { characterId: 2 } }, { $elemMatch: { characterId: 20 } }],
-    });
+  it("finds 1v1s by their indexed character pair, either order", () => {
+    expect(pairBranch).toEqual({ charPair: { $in: ["2-20"] } });
+    expect(inner({ p1CharacterId: "20,9", p2CharacterId: "2" }).$or[0]).toEqual({ charPair: { $in: ["2-20", "2-9"] } });
   });
 
-  it("matches each side to a different slot among four players", () => {
-    expect(q.$or).toHaveLength(12);
-    expect(q.$or).toContainEqual({ "players.2.characterId": 2, "players.3.characterId": 20 });
-    expect(q.$or).toContainEqual({ "players.1.characterId": 2, "players.0.characterId": 20 });
-    for (const branch of q.$or) {
+  it("checks 3-4 player games slot by slot, each side a different slot", () => {
+    expect(multiBranch.charPair).toBe("multi");
+    expect(multiBranch.players).toEqual({
+      $all: [{ $elemMatch: { characterId: 2 } }, { $elemMatch: { characterId: 20 } }],
+    });
+    expect(multiBranch.$or).toHaveLength(12);
+    expect(multiBranch.$or).toContainEqual({ "players.2.characterId": 2, "players.3.characterId": 20 });
+    for (const branch of multiBranch.$or) {
       const slots = Object.keys(branch).map((k) => k.split(".")[1]);
       expect(new Set(slots).size).toBe(2);
     }
+  });
+
+  it("keeps the general form when a side also names a player", () => {
+    const withCode = inner({ p1CharacterId: "2", p1ConnectCode: "MANG#0", p2CharacterId: "20" });
+    expect(withCode.charPair).toBeUndefined();
+    expect(withCode.$or).toHaveLength(12);
   });
 });
 

@@ -19,7 +19,7 @@ describe("duplicate recordings", () => {
   });
 });
 
-import { isUsableReplay, NOT_JUNK_QUERY } from "../models/Replay";
+import { isUsableReplay, NOT_JUNK_QUERY, charPairOf } from "../models/Replay";
 
 describe("usable excludes hidden duplicates", () => {
   const game = { stageId: 31, duration: 5000, players: [{ characterId: 2 }] };
@@ -27,5 +27,14 @@ describe("usable excludes hidden duplicates", () => {
     expect(isUsableReplay(game)).toBe(true);
     expect(isUsableReplay({ ...game, duplicateOf: "6abbe33244a1db24ff7a5525" })).toBe(false);
     expect(NOT_JUNK_QUERY).toHaveProperty("duplicateOf", null);
+  });
+});
+
+describe("charPairOf", () => {
+  it("names a 1v1 by its sorted character pair, marks bigger games, skips unknowns", () => {
+    expect(charPairOf([{ characterId: 20 }, { characterId: 2 }])).toBe("2-20");
+    expect(charPairOf([{ characterId: 2 }, { characterId: 2 }, { characterId: 9 }])).toBe("multi");
+    expect(charPairOf([{ characterId: 2 }, { characterId: null }])).toBeNull();
+    expect(charPairOf([{ characterId: 2 }])).toBeNull();
   });
 });

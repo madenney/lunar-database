@@ -64,6 +64,21 @@ export function isUsableReplay(r: {
   return true;
 }
 
+/**
+ * The characters of a 1v1 as a sorted pair ("2-20" = Fox vs Falco), "multi" for
+ * 3–4 player games, null when unknown. Indexed, so a matchup search is one index
+ * lookup (and its count and size come straight from the index) instead of
+ * checking every game of the more common character. Kept by the insert hooks
+ * below and the crawler; scripts/backfillCharPair.ts fills older docs.
+ */
+export function charPairOf(players: { characterId?: number | null }[] | null | undefined): string | null {
+  const ps = players ?? [];
+  if (ps.length >= 3) return "multi";
+  if (ps.length !== 2 || ps.some((p) => p.characterId == null)) return null;
+  const [a, b] = ps.map((p) => p.characterId as number).sort((x, y) => x - y);
+  return `${a}-${b}`;
+}
+
 export interface IReplay extends Document {
   filePath: string;
   fileHash: string;
@@ -86,6 +101,8 @@ export interface IReplay extends Document {
   setGame: number | null;
   /** Another recording of this same game is the one we show (scripts/markDuplicates.ts). */
   duplicateOf: mongoose.Types.ObjectId | null;
+  /** See charPairOf. */
+  charPair: string | null;
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
@@ -124,6 +141,7 @@ const ReplaySchema = new Schema<IReplay>({
   setId: { type: String, default: null },
   setGame: { type: Number, default: null },
   duplicateOf: { type: Schema.Types.ObjectId, default: null },
+  charPair: { type: String, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
   usable: { type: Boolean, default: null },
@@ -143,6 +161,7 @@ const ReplaySchema = new Schema<IReplay>({
 ReplaySchema.pre("save", function () {
   const doc = this as unknown as IReplay;
   doc.usable = isUsableReplay(doc);
+  doc.charPair = charPairOf(doc.players);
 });
 // Mongoose 9 passes insertMany middleware only the docs array (no `next`
 // callback). The (next, docs) signature from Mongoose 8 threw "next is not a
@@ -150,7 +169,10 @@ ReplaySchema.pre("save", function () {
 // (cast: mongoose's pre() overloads don't expose the insertMany docs argument)
 ReplaySchema.pre("insertMany", (function (docs: IReplay[]) {
   if (Array.isArray(docs)) {
-    for (const doc of docs) doc.usable = isUsableReplay(doc);
+    for (const doc of docs) {
+      doc.usable = isUsableReplay(doc);
+      doc.charPair = charPairOf(doc.players);
+    }
   }
 }) as never);
 
@@ -165,6 +187,12 @@ ReplaySchema.index({ matchId: 1, gameNumber: 1 }, { partialFilterExpression: { m
 ReplaySchema.index({ tournamentKey: 1, startAt: -1 }, { partialFilterExpression: { tournamentKey: { $type: "string" } } });
 ReplaySchema.index({ setId: 1 }, { partialFilterExpression: { setId: { $type: "string" } } });
 ReplaySchema.index({ duplicateOf: 1 }, { partialFilterExpression: { duplicateOf: { $type: "objectId" } } });
+// Source-filtered searches sorted by date. Without it, "ranked only" (all undated)
+// walked the startAt index past ~3M dated games first: 5–8 s per search in the
+// launch load test.
+ReplaySchema.index({ source: 1, usable: 1, startAt: -1 }, { name: "source_usable_startAt" });
+// Matchup searches (charPairOf): count and size summed from the index alone.
+ReplaySchema.index({ charPair: 1, usable: 1, fileSize: 1, duration: 1 }, { name: "charPair_usable_size_dur" });
 // Serves the common estimate/search shape: match on source + usable, then sum
 // fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
 // (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.

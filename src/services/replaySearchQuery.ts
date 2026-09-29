@@ -176,8 +176,21 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
         }
       }
     }
-    query.players = { $all: [{ $elemMatch: p1Match }, { $elemMatch: p2Match }] };
-    query.$or = slotPairs;
+    const charsOnly = (m: Record<string, any>) => Object.keys(m).length === 1 && "characterId" in m;
+    if (charsOnly(p1Match) && charsOnly(p2Match)) {
+      // A character-vs-character matchup: 1v1s by their indexed pair (charPair),
+      // 3–4 player games by the per-slot check below. Same results, but a
+      // matchup no longer means checking every game of the commoner character.
+      const pairs = new Set<string>();
+      for (const a of p1CharIds.map(Number)) for (const b of p2CharIds.map(Number)) pairs.add(a <= b ? `${a}-${b}` : `${b}-${a}`);
+      query.$or = [
+        { charPair: { $in: [...pairs] } },
+        { charPair: "multi", players: { $all: [{ $elemMatch: p1Match }, { $elemMatch: p2Match }] }, $or: slotPairs },
+      ];
+    } else {
+      query.players = { $all: [{ $elemMatch: p1Match }, { $elemMatch: p2Match }] };
+      query.$or = slotPairs;
+    }
   } else if (hasP1) {
     query.players = { $elemMatch: p1Match };
   } else if (hasP2) {

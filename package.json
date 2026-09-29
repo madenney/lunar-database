@@ -30,6 +30,7 @@
     "analytics": "ts-node src/scripts/analytics.ts",
     "dashboard": "ts-node src/scripts/dashboard.ts",
     "build-players": "ts-node src/scripts/buildPlayers.ts",
+    "backfill-charpair": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/backfillCharPair.ts",
     "mark-duplicates": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/markDuplicates.ts",
     "extract-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/extractStats.ts"
   },
