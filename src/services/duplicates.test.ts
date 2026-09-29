@@ -10,10 +10,12 @@ describe("duplicate recordings", () => {
     expect(sameGame([r("a", 5000, 1)])).toBe(false);
   });
 
-  it("keeps the set-linked copy, else the largest, else the first indexed", () => {
+  it("keeps the set-linked copy, then the tournament's, then the largest, else the first indexed", () => {
     expect(pickCanonical([r("a", 1, 900), r("b", 1, 100, "sgg-1")])._id).toBe("b");
     expect(pickCanonical([r("a", 1, 100), r("b", 1, 900)])._id).toBe("b");
     expect(pickCanonical([r("b", 1, 100), r("a", 1, 100)])._id).toBe("a");
+    // A tournament's copy beats a bigger spectator capture from a netplay folder.
+    expect(pickCanonical([{ ...r("n", 1, 900), source: "netplay" }, { ...r("t", 1, 100), tournamentKey: "kotj-7", source: "tournament" }])._id).toBe("t");
   });
 });
 

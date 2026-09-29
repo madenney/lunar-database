@@ -11,7 +11,7 @@
  * others get duplicateOf = that one and usable = false. Nothing is deleted:
  * hidden copies keep their files, stats and pages, and --undo restores them.
  *
- * Which copy stays: see services/duplicates.ts (set-linked, else largest, else first).
+ * Which copy stays: see services/duplicates.ts (set, tournament, then largest file).
  *
  *   npm run mark-duplicates              dry run: what would change
  *   npm run mark-duplicates -- --apply
@@ -60,7 +60,7 @@ async function main() {
   let checked = 0;
   let skipped = 0;
   for await (const g of groups) {
-    const recs = (await Replay.find({ _id: { $in: g.ids } }).select({ duration: 1, fileSize: 1, setId: 1 }).lean()) as unknown as Recording[];
+    const recs = (await Replay.find({ _id: { $in: g.ids } }).select({ duration: 1, fileSize: 1, setId: 1, tournamentKey: 1, source: 1 }).lean()) as unknown as Recording[];
     if (!sameGame(recs)) {
       skipped++;
       continue;
