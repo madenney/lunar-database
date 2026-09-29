@@ -193,6 +193,9 @@ ReplaySchema.index({ duplicateOf: 1 }, { partialFilterExpression: { duplicateOf:
 ReplaySchema.index({ source: 1, usable: 1, startAt: -1 }, { name: "source_usable_startAt" });
 // Matchup searches (charPairOf): count and size summed from the index alone.
 ReplaySchema.index({ charPair: 1, usable: 1, fileSize: 1, duration: 1 }, { name: "charPair_usable_size_dur" });
+// The 3–4 player branch of a matchup: only multi-player games with one side's
+// character (~134k multi-player games in all) instead of every one of them.
+ReplaySchema.index({ charPair: 1, "players.characterId": 1, usable: 1 }, { name: "charPair_chars_usable" });
 // Serves the common estimate/search shape: match on source + usable, then sum
 // fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
 // (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.
