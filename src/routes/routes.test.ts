@@ -30,6 +30,8 @@ let baseUrl: string;
 
 beforeAll(async () => {
   await mongoose.connect(`${process.env.TEST_MONGODB_URL ?? "mongodb://localhost:27017"}/lm-database-test-routes`);
+  // Searches force some indexes (selectionHint), so they must exist before the first request.
+  await Replay.init();
 
   app = express();
   app.use(express.json());

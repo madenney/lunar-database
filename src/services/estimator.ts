@@ -41,7 +41,7 @@ async function computeCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
 ): Promise<{ count: number; rawSize: number; totalDurationFrames: number; capped?: boolean }> {
-  const { query, sortObj } = await resolveSelection(filter);
+  const { query, sortObj, hint } = await resolveSelection(filter);
   const maxFiles = filter.maxFiles != null && Number(filter.maxFiles) > 0 ? Number(filter.maxFiles) : undefined;
   const maxSizeMb = filter.maxSizeMb != null && Number(filter.maxSizeMb) > 0 ? Number(filter.maxSizeMb) : undefined;
   const wantDuration = !!options?.includeDuration;
@@ -56,7 +56,7 @@ async function computeCountAndSize(
     let count = 0;
     let rawSize = 0;
     let totalDurationFrames = 0;
-    const cursor = Replay.find(query)
+    const cursor = (hint ? Replay.find(query).hint(hint) : Replay.find(query))
       .select(wantDuration ? "fileSize duration" : "fileSize")
       .sort(sortObj)
       .maxTimeMS(15000)
@@ -95,7 +95,7 @@ async function computeCountAndSize(
     groupFields.totalDuration = { $sum: { $ifNull: ["$duration", 0] } };
   }
 
-  const agg = await Replay.aggregate([{ $match: query }, { $limit: config.countCap }, { $group: groupFields }]).option({ maxTimeMS: 15000 });
+  const agg = await Replay.aggregate([{ $match: query }, { $limit: config.countCap }, { $group: groupFields }]).option({ maxTimeMS: 15000, ...(hint ? { hint } : {}) });
 
   const totalCount = agg[0]?.n ?? 0;
   const capped = totalCount >= config.countCap;

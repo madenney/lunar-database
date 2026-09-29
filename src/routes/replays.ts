@@ -165,7 +165,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
 
     // Same selection as estimate, job creation and the bundle worker, including
     // how ascending date order treats undated replays.
-    const { query: finalQuery, sortObj } = await resolveSelection({ ...params, sort: sort as string | undefined });
+    const { query: finalQuery, sortObj, hint } = await resolveSelection({ ...params, sort: sort as string | undefined });
 
     const rawPage = parseInt(page as string, 10);
     const rawLimit = parseInt(limit as string, 10);
@@ -176,10 +176,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const skip = (pageNum - 1) * limitNum;
 
     const [replays, total] = await Promise.all([
-      Replay.find(finalQuery).select(PUBLIC_REPLAY_EXCLUDE).sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
+      (hint ? Replay.find(finalQuery).hint(hint) : Replay.find(finalQuery)).select(PUBLIC_REPLAY_EXCLUDE).sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
       // Counting a broad filter is the expensive part of a search; reuse it.
       // It stops at countCap ("150,000+"): an exact count of 1.5M games costs ~1.7 s.
-      heavyQueries.get(paramsKey("count", { ...params, sort }), () => Replay.countDocuments(finalQuery, { limit: config.countCap }).maxTimeMS(10000)),
+      heavyQueries.get(paramsKey("count", { ...params, sort }), () => Replay.countDocuments(finalQuery, { limit: config.countCap, ...(hint ? { hint } : {}) }).maxTimeMS(10000)),
     ]);
 
     // Extracted stats are an enhancement: a slow or failed lookup never fails the search.

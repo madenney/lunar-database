@@ -68,13 +68,25 @@ export function parseSort(sort?: string): Record<string, 1 | -1> {
  */
 export async function resolveSelection(
   params: ReplaySearchParams
-): Promise<{ query: Record<string, any>; sortObj: Record<string, 1 | -1> }> {
+): Promise<{ query: Record<string, any>; sortObj: Record<string, 1 | -1>; hint?: Record<string, 1 | -1> }> {
   const sortObj = parseSort(params.sort);
   const query = buildReplaySearchQuery(params);
-  if (sortObj.startAt !== 1) return { query, sortObj };
+  const hint = selectionHint(params);
+  if (sortObj.startAt !== 1) return { query, sortObj, hint };
   const dated = { $and: [query, { startAt: { $ne: null } }] };
-  const anyDated = await Replay.findOne(dated).select("_id").maxTimeMS(10000).lean();
-  return { query: anyDated ? dated : query, sortObj };
+  let probe = Replay.findOne(dated).select("_id").maxTimeMS(10000);
+  if (hint) probe = probe.hint(hint);
+  const anyDated = await probe.lean();
+  return { query: anyDated ? dated : query, sortObj, hint };
+}
+
+/**
+ * An index to force for this selection, when MongoDB's own choice is known to be
+ * bad. A tournament holds at most a few thousand games, but sorted oldest-first
+ * the planner walked the whole startAt index (2.2M keys, ~6 s under load).
+ */
+export function selectionHint(params: ReplaySearchParams): Record<string, 1 | -1> | undefined {
+  return tournamentKeys(params.tournament).length ? { tournamentKey: 1, startAt: -1 } : undefined;
 }
 
 const MAX_PLAYERS = 4;

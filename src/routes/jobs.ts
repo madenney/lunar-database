@@ -148,8 +148,8 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     // so skip that (potentially full-collection) count.
     let totalMatched = count;
     if (hasLimit && hasFilter) {
-      const { query } = await resolveSelection(filter);
-      totalMatched = await Replay.countDocuments(query).maxTimeMS(15000);
+      const { query, hint } = await resolveSelection(filter);
+      totalMatched = await Replay.countDocuments(query, hint ? { hint } : {}).maxTimeMS(15000);
     }
 
     const job = await Job.create({

@@ -64,9 +64,10 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
     const maxBytes = job.filter.maxSizeMb != null && job.filter.maxSizeMb > 0 ? Number(job.filter.maxSizeMb) * 1024 * 1024 : Infinity;
     const ordered = maxFiles !== Infinity || maxBytes !== Infinity;
 
-    const { query: cursorQuery, sortObj } = await resolveSelection(job.filter);
+    const { query: cursorQuery, sortObj, hint } = await resolveSelection(job.filter);
 
     let find = Replay.find(cursorQuery).select("filePath fileSize fileHash");
+    if (hint) find = find.hint(hint);
     if (ordered) find = find.sort(sortObj);
     const cursor = find.lean().cursor();
 
