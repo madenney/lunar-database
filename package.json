@@ -29,6 +29,7 @@
     "pin": "ts-node src/scripts/pin.ts",
     "analytics": "ts-node src/scripts/analytics.ts",
     "dashboard": "ts-node src/scripts/dashboard.ts",
+    "build-clips": "TS_NODE_TRANSPILE_ONLY=true node --max-old-space-size=4096 -r ts-node/register src/scripts/buildClips.ts",
     "build-players": "ts-node src/scripts/buildPlayers.ts",
     "backfill-charpair": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/backfillCharPair.ts",
     "mark-duplicates": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/markDuplicates.ts",
