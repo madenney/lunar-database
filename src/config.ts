@@ -42,6 +42,8 @@ export const config = {
   queryCacheSeconds: parseInt(process.env.QUERY_CACHE_SECONDS || "600", 10),
   /** Most count/estimate scans MongoDB runs at once; more queue (load test: >20 = timeouts). */
   queryMaxHeavy: parseInt(process.env.QUERY_MAX_HEAVY || "6", 10),
+  /** Counts stop here and report "N+" (a selection this big is far over the bundle cap). */
+  countCap: parseInt(process.env.COUNT_CAP || "150000", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly

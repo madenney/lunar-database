@@ -29,7 +29,7 @@ export interface EstimateResult {
 export async function queryCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
-): Promise<{ count: number; rawSize: number; totalDurationFrames: number }> {
+): Promise<{ count: number; rawSize: number; totalDurationFrames: number; capped?: boolean }> {
   // Scanning every match of a broad filter is expensive and the answer only
   // changes after a crawl, so estimates (and job creation) share cached results.
   return heavyQueries.get(paramsKey(options?.includeDuration ? "size+dur" : "size", filter as Record<string, unknown>), () =>
@@ -40,7 +40,7 @@ export async function queryCountAndSize(
 async function computeCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
-): Promise<{ count: number; rawSize: number; totalDurationFrames: number }> {
+): Promise<{ count: number; rawSize: number; totalDurationFrames: number; capped?: boolean }> {
   const { query, sortObj } = await resolveSelection(filter);
   const maxFiles = filter.maxFiles != null && Number(filter.maxFiles) > 0 ? Number(filter.maxFiles) : undefined;
   const maxSizeMb = filter.maxSizeMb != null && Number(filter.maxSizeMb) > 0 ? Number(filter.maxSizeMb) : undefined;
@@ -81,19 +81,24 @@ async function computeCountAndSize(
   // doesn't actually trim, i.e. maxFiles >= count). This avoids sorting millions of
   // docs just to size a slice; the worker streams the exact first-N when it builds
   // the real bundle.
+  //
+  // Counting stops at config.countCap matches: past that a selection is far
+  // over the per-bundle size cap anyway, and scanning every one of 1.5M Fox
+  // games cost ~1.7 s of MongoDB per request (the launch load test's
+  // bottleneck). `capped` says the totals are "at least".
   const groupFields: any = {
     _id: null,
+    n: { $sum: 1 },
     totalSize: { $sum: "$fileSize" },
   };
   if (wantDuration) {
     groupFields.totalDuration = { $sum: { $ifNull: ["$duration", 0] } };
   }
 
-  const [totalCount, agg] = await Promise.all([
-    Replay.countDocuments(query).maxTimeMS(15000),
-    Replay.aggregate([{ $match: query }, { $group: groupFields }]).option({ maxTimeMS: 15000 }),
-  ]);
+  const agg = await Replay.aggregate([{ $match: query }, { $limit: config.countCap }, { $group: groupFields }]).option({ maxTimeMS: 15000 });
 
+  const totalCount = agg[0]?.n ?? 0;
+  const capped = totalCount >= config.countCap;
   const totalSize = agg[0]?.totalSize ?? 0;
   const totalDuration = wantDuration ? (agg[0]?.totalDuration ?? 0) : 0;
 
@@ -105,6 +110,8 @@ async function computeCountAndSize(
     count: effectiveCount,
     rawSize: maxFiles != null ? Math.round(totalSize * ratio) : totalSize,
     totalDurationFrames: maxFiles != null ? Math.round(totalDuration * ratio) : totalDuration,
+    // A limit below the cap makes the (averaged) totals a real estimate again.
+    capped: capped && (maxFiles == null || maxFiles >= config.countCap),
   };
 }
 

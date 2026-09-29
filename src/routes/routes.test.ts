@@ -602,6 +602,27 @@ describe("POST /api/jobs", () => {
   });
 });
 
+describe("count cap", () => {
+  it("stops counting at countCap and says so, in search and estimate", async () => {
+    const { config } = await import("../config");
+    const saved = config.countCap;
+    config.countCap = 3;
+    try {
+      for (let i = 0; i < 5; i++) {
+        await Replay.create({ filePath: `/test/cap${i}.slp`, fileHash: `cap${i}`, fileSize: 1000, stageId: 31, players: [{ playerIndex: 0, characterId: 2 }] });
+      }
+      const list = await get("/api/replays?stageId=31&limit=2");
+      expect(list.body.pagination).toMatchObject({ total: 3, totalCapped: true });
+      const est = await post("/api/replays/estimate", { stageId: "31" });
+      expect(est.body).toMatchObject({ replayCount: 3, rawSize: 3000, capped: true });
+      const limited = await post("/api/replays/estimate", { stageId: "31", maxFiles: 2 });
+      expect(limited.body).toMatchObject({ replayCount: 2, capped: false });
+    } finally {
+      config.countCap = saved;
+    }
+  });
+});
+
 describe("download queue: reuse, sharing, size cap, public queue", () => {
   const A = { "X-Client-Id": "a1a1a1a1-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
   const B = { "X-Client-Id": "b2b2b2b2-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
