@@ -6,6 +6,7 @@ import { GameStats } from "../models/GameStats";
 import { loadGameEvents } from "../services/gameDetail";
 import { resolveSelection, ReplaySearchParams } from "../services/replaySearchQuery";
 import { filterKey, findReusableJob, forecastNewJob, getQueueState, pauseMessage } from "../services/jobQueue";
+import { heavyQueries, paramsKey } from "../services/queryCache";
 import { parseFilter, hasFilterOrLimit } from "../services/replayFilter";
 import { sendApiError } from "../utils/apiErrors";
 import { config } from "../config";
@@ -174,7 +175,8 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
 
     const [replays, total] = await Promise.all([
       Replay.find(finalQuery).select(PUBLIC_REPLAY_EXCLUDE).sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
-      Replay.countDocuments(finalQuery).maxTimeMS(10000),
+      // Counting a broad filter is the expensive part of a search; reuse it.
+      heavyQueries.get(paramsKey("count", { ...params, sort }), () => Replay.countDocuments(finalQuery).maxTimeMS(10000)),
     ]);
 
     // Extracted stats are an enhancement: a slow or failed lookup never fails the search.

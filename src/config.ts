@@ -38,6 +38,10 @@ export const config = {
   jobUploadMaxAttempts: parseInt(process.env.JOB_UPLOAD_MAX_ATTEMPTS || "3", 10),
   /** Alert when bundle bytes uploaded + downloaded in 24 h pass this (0 = off). Early warning before the storage provider's daily caps. */
   storageDailyAlertGb: parseInt(process.env.STORAGE_DAILY_ALERT_GB || "0", 10),
+  /** How long search counts and size estimates are reused (services/queryCache.ts). */
+  queryCacheSeconds: parseInt(process.env.QUERY_CACHE_SECONDS || "600", 10),
+  /** Most count/estimate scans MongoDB runs at once; more queue (load test: >20 = timeouts). */
+  queryMaxHeavy: parseInt(process.env.QUERY_MAX_HEAVY || "6", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly

@@ -9,6 +9,7 @@
 import mongoose from "mongoose";
 import { connectDb } from "../db";
 import { GameStats } from "../models/GameStats";
+import { Replay } from "../models/Replay";
 import { PlayerStats } from "../models/PlayerStats";
 import { PlayerStatsBuilder } from "../services/playerStats";
 
@@ -34,8 +35,13 @@ async function main() {
       batchSize: 5000,
     }
   );
+  // Extra recordings of a game we already count (scripts/markDuplicates.ts).
+  const duplicates = new Set(
+    (await Replay.find({ duplicateOf: { $type: "objectId" } }).select({ _id: 1 }).lean()).map((r) => String(r._id))
+  );
   let games = 0;
   for await (const g of cursor) {
+    if (duplicates.has(String((g as any).replayId))) continue;
     builder.add(g as any);
     if (++games % 200_000 === 0) console.log(`${games.toLocaleString()} games, ${builder.size.toLocaleString()} players`);
   }

@@ -1,6 +1,7 @@
 import { Replay } from "../models/Replay";
 import { resolveSelection, ReplaySearchParams } from "./replaySearchQuery";
 import { config } from "../config";
+import { heavyQueries, paramsKey } from "./queryCache";
 
 /**
  * Per-file throughput used for ETA estimates (files per second).
@@ -26,6 +27,17 @@ export interface EstimateResult {
  * Query MongoDB for replay count + total raw size, respecting maxFiles/maxSizeMb limits.
  */
 export async function queryCountAndSize(
+  filter: ReplaySearchParams,
+  options?: { includeDuration?: boolean }
+): Promise<{ count: number; rawSize: number; totalDurationFrames: number }> {
+  // Scanning every match of a broad filter is expensive and the answer only
+  // changes after a crawl, so estimates (and job creation) share cached results.
+  return heavyQueries.get(paramsKey(options?.includeDuration ? "size+dur" : "size", filter as Record<string, unknown>), () =>
+    computeCountAndSize(filter, options)
+  );
+}
+
+async function computeCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
 ): Promise<{ count: number; rawSize: number; totalDurationFrames: number }> {

@@ -34,6 +34,10 @@ export function sourceFromFolderLabel(folderLabel: string | null | undefined): R
  * ended at or before the "GO!" frame (quit during countdown, handwarmer, truncated
  * file). null/missing duration is KEPT — unknown length, but possibly a valid game.
  *
+ * A replay that is another recording of a game we already have (duplicateOf,
+ * set by scripts/markDuplicates.ts) is not usable either: search, counts,
+ * bundles and totals show each game once.
+ *
  * None of this is indexable, so evaluating it forces a fetch of every candidate
  * document. It's materialised onto each doc as `usable` (see isUsableReplay) so
  * queries can hit an index instead. Keep the two in lockstep.
@@ -42,6 +46,7 @@ export const NOT_JUNK_QUERY = {
   $or: [{ stageId: { $ne: null } }, { "players.characterId": { $ne: null } }],
   "players.0": { $exists: true },
   duration: { $not: { $lte: 0 } },
+  duplicateOf: null,
 };
 
 /** In-process twin of NOT_JUNK_QUERY, for tagging a replay at insert time. */
@@ -49,7 +54,9 @@ export function isUsableReplay(r: {
   stageId?: number | null;
   duration?: number | null;
   players?: { characterId?: number | null }[] | null;
+  duplicateOf?: unknown;
 }): boolean {
+  if (r.duplicateOf) return false;
   const players = r.players ?? [];
   if (players.length === 0) return false;
   if (r.stageId == null && !players.some((p) => p.characterId != null)) return false;
@@ -77,6 +84,8 @@ export interface IReplay extends Document {
   tournamentKey: string | null;
   setId: string | null;
   setGame: number | null;
+  /** Another recording of this same game is the one we show (scripts/markDuplicates.ts). */
+  duplicateOf: mongoose.Types.ObjectId | null;
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
@@ -114,6 +123,7 @@ const ReplaySchema = new Schema<IReplay>({
   tournamentKey: { type: String, default: null },
   setId: { type: String, default: null },
   setGame: { type: Number, default: null },
+  duplicateOf: { type: Schema.Types.ObjectId, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },
   usable: { type: Boolean, default: null },
@@ -154,6 +164,7 @@ ReplaySchema.index({ source: 1 });
 ReplaySchema.index({ matchId: 1, gameNumber: 1 }, { partialFilterExpression: { matchId: { $type: "string" } } });
 ReplaySchema.index({ tournamentKey: 1, startAt: -1 }, { partialFilterExpression: { tournamentKey: { $type: "string" } } });
 ReplaySchema.index({ setId: 1 }, { partialFilterExpression: { setId: { $type: "string" } } });
+ReplaySchema.index({ duplicateOf: 1 }, { partialFilterExpression: { duplicateOf: { $type: "objectId" } } });
 // Serves the common estimate/search shape: match on source + usable, then sum
 // fileSize/duration straight out of the index. Cuts a 2M-row estimate ~5.7x
 // (2.6s -> 0.46s). Name is pinned so it matches the index created by hand.
