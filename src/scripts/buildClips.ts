@@ -23,7 +23,7 @@ import { connectDb } from "../db";
 import { config } from "../config";
 import { Replay } from "../models/Replay";
 import { StatsShard } from "../models/StatsShard";
-import { clipsFromLine, type ClipperLine, type ClipDoc } from "../services/clips";
+import { clipsFromLine, CLIP_INDEXES, type ClipperLine, type ClipDoc } from "../services/clips";
 
 const args = process.argv.slice(2);
 const opt = (name: string) => {
@@ -120,14 +120,9 @@ async function main() {
 
   if (APPLY) {
     console.log("Creating indexes…");
-    await build.createIndexes([
-      { key: { type: 1, "attacker.characterId": 1, stageId: 1, damage: -1 }, name: "type_attChar_stage_damage" },
-      { key: { type: 1, "attacker.connectCode": 1, startAt: -1 }, name: "type_attCode_date" },
-      { key: { type: 1, "victim.characterId": 1, damage: -1 }, name: "type_vicChar_damage" },
-      { key: { type: 1, score: -1 }, name: "type_score" },
-      { key: { type: 1, damage: -1 }, name: "type_damage" },
-      { key: { replayId: 1 }, name: "replayId" },
-    ]);
+    // Every search the API allows starts with `type` and an equality on one of
+    // these, then sorts by rank ("best") or startAt; see routes/clips.ts.
+    await build.createIndexes(CLIP_INDEXES.map((i) => ({ key: { ...i.key }, name: i.name })));
     if (todo.length < shards.length) {
       console.log(`Partial build (${todo.length} shards) left in "${BUILD}"; live "${LIVE}" not replaced.`);
     } else {

@@ -44,12 +44,13 @@ describe("clipsFromLine", () => {
       detail,
     });
     expect(clips[0].moveList).toHaveLength(4);
-    expect(clips[1]).toMatchObject({ endPercent: null, damage: null });
+    expect(clips[1]).toMatchObject({ endPercent: null, damage: null, rank: 0 });
+    expect(clips[0].rank).toBe(50.6);
   });
 
   it("maps edgeguards with the edgeguarder as attacker and the detector score", () => {
     const [eg] = clipsFromLine({ r: "x", edgeguards: [[1, 0, 700, 820, { hits: 3, score: 12.345 }]] }, replay, detail);
-    expect(eg).toMatchObject({ type: "edgeguard", attacker: { port: 0 }, victim: { port: 1 }, score: 12.3, moves: 3, didKill: true });
+    expect(eg).toMatchObject({ type: "edgeguard", attacker: { port: 0 }, victim: { port: 1 }, score: 12.3, rank: 12.3, moves: 3, didKill: true });
   });
 
   it("maps an early quit-out", () => {

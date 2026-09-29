@@ -13,6 +13,7 @@ import referenceRoutes from "./reference";
 import submissionsRoutes from "./submissions";
 import playersRoutes from "./players";
 import tournamentRoutes, { setsRouter } from "./tournaments";
+import clipRoutes from "./clips";
 import { Tournament } from "../models/Tournament";
 import { TournamentSet } from "../models/TournamentSet";
 import { Player } from "../models/Player";
@@ -43,6 +44,7 @@ beforeAll(async () => {
   app.use("/api/players", playersRoutes);
   app.use("/api/tournaments", tournamentRoutes);
   app.use("/api/sets", setsRouter);
+  app.use("/api/clips", clipRoutes);
 
   server = await new Promise<http.Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -601,6 +603,44 @@ describe("POST /api/jobs", () => {
     expect(job!.filter.maxFiles).toBe(3);
     expect(job!.replayCount).toBe(3);
     expect(job!.estimatedSize).toBe(30000);
+  });
+});
+
+describe("POST /api/clips", () => {
+  const clips = () => mongoose.connection.collection("clips");
+  afterEach(async () => {
+    await clips().deleteMany({});
+  });
+  const clip = (over: Record<string, unknown>) => ({
+    replayId: new mongoose.Types.ObjectId(), type: "combo", startFrame: 100, endFrame: 200, gameFrames: 9000, stageId: 31,
+    source: "netplay", startAt: new Date("2025-01-01"), startPercent: 0, endPercent: 80, damage: 80, moves: 5, didKill: true,
+    moveList: [[1, 100, 10, 1]], score: null, rank: 80, metrics: null,
+    attacker: { port: 0, characterId: 2, connectCode: "AAA#1", displayName: "Aa" },
+    victim: { port: 1, characterId: 9, connectCode: "BBB#2", displayName: "Bb" },
+    detail: { run: "main", extractor: "clipper", version: 1, shard: "s" },
+    ...over,
+  });
+
+  it("finds Fox kill combos on Marth, best first, with what a result row needs", async () => {
+    await clips().insertMany([
+      clip({ rank: 80 }),
+      clip({ rank: 120, damage: 120 }),
+      clip({ rank: 200, attacker: { port: 0, characterId: 20, connectCode: "CCC#3", displayName: "Cc" } }), // Falco: excluded
+      clip({ type: "edgeguard", rank: 50 }), // other type: excluded
+    ]);
+    const { status, body } = await post("/api/clips", { type: "combo", attackerCharacterId: "2", victimCharacterId: "9", killOnly: true });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ total: 2, capped: false, page: 1 });
+    expect(body.results.map((c: any) => c.rank)).toEqual([120, 80]);
+    expect(body.results[0]).toMatchObject({ type: "combo", startFrame: 100, endFrame: 200, attacker: { connectCode: "AAA#1" }, moveList: [[1, 100, 10, 1]] });
+    expect(body.results[0].id).toBeDefined();
+    expect(body.results[0]).not.toHaveProperty("detail");
+  });
+
+  it("rejects a search without a valid type", async () => {
+    const { status, body } = await post("/api/clips", { attackerCharacterId: "2" });
+    expect(status).toBe(400);
+    expect(body.code).toBe("invalid_request");
   });
 });
 

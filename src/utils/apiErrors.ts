@@ -12,6 +12,8 @@ import type { Response } from "express";
 export const API_ERROR_CODES = {
   /** 400: estimate/job without any filter or limit. */
   filter_required: "Add at least one filter or a limit",
+  /** 400: a search's parameters are invalid (e.g. clip search without a valid type). */
+  invalid_request: "Invalid search",
   /** 400: the filter matches no replays. */
   no_matches: "No replays match this filter",
   /** 400: missing or malformed X-Client-Id. */

@@ -45,6 +45,8 @@ export interface ClipDoc {
   moveList: MoveRow[];
   /** Edgeguards: the detector's interestingness score (metrics.score). */
   score: number | null;
+  /** "Best first" sort key for every type: damage for combos and quit-outs, score for edgeguards. */
+  rank: number;
   metrics: Record<string, unknown> | null;
   detail: { run: string; extractor: "clipper"; version: number; shard: string };
 }
@@ -104,6 +106,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       didKill: !!kill,
       moveList,
       score: null,
+      rank: endPct == null ? 0 : round1(endPct - startPct)!,
       metrics: null,
     });
   }
@@ -124,6 +127,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       didKill: true,
       moveList: [],
       score: score == null ? null : round1(score),
+      rank: score == null ? 0 : round1(score)!,
       metrics: metrics ?? null,
     });
   }
@@ -145,8 +149,28 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       didKill: false,
       moveList,
       score: null,
+      rank: round1(pctAtQuit - startPct)!,
       metrics: null,
     });
   }
   return out;
 }
+
+/**
+ * Indexes of the clips collection. Every search starts with `type`, narrows by
+ * an equality (characters, a player, kill/zero-to-death) and sorts by `rank`
+ * ("best") or `startAt`. Stage, source, dates, damage and move filters ride
+ * along. Without these a sorted search scans all ~27M clips (measured: 280 s).
+ */
+export const CLIP_INDEXES = [
+  { key: { type: 1, rank: -1 }, name: "type_rank" },
+  { key: { type: 1, startAt: -1 }, name: "type_date" },
+  { key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, rank: -1 }, name: "type_chars_rank" },
+  { key: { type: 1, "attacker.characterId": 1, startAt: -1 }, name: "type_attChar_date" },
+  { key: { type: 1, "victim.characterId": 1, rank: -1 }, name: "type_vicChar_rank" },
+  { key: { type: 1, "attacker.connectCode": 1, rank: -1 }, name: "type_attCode_rank" },
+  { key: { type: 1, "attacker.connectCode": 1, startAt: -1 }, name: "type_attCode_date" },
+  { key: { type: 1, "victim.connectCode": 1, rank: -1 }, name: "type_vicCode_rank" },
+  { key: { type: 1, didKill: 1, startPercent: 1, rank: -1 }, name: "type_kill_start_rank" },
+  { key: { replayId: 1 }, name: "replayId" },
+] as const;
