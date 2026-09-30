@@ -178,8 +178,10 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
     const [replays, total] = await Promise.all([
       (hint ? Replay.find(finalQuery).hint(hint) : Replay.find(finalQuery)).select(PUBLIC_REPLAY_EXCLUDE).sort(sortObj).skip(skip).limit(limitNum).maxTimeMS(10000).lean(),
       // Counting a broad filter is the expensive part of a search; reuse it.
-      // It stops at countCap ("150,000+"): an exact count of 1.5M games costs ~1.7 s.
-      heavyQueries.get(paramsKey("count", { ...params, sort }), () => Replay.countDocuments(finalQuery, { limit: config.countCap, ...(hint ? { hint } : {}) }).maxTimeMS(10000)),
+      // Exact by default (COUNT_CAP can bound it); cached, so ~1.5 s only the first time.
+      heavyQueries.get(paramsKey("count", { ...params, sort }), () =>
+        Replay.countDocuments(finalQuery, { ...(config.countCap > 0 ? { limit: config.countCap } : {}), ...(hint ? { hint } : {}) }).maxTimeMS(15000)
+      ),
     ]);
 
     // Extracted stats are an enhancement: a slow or failed lookup never fails the search.
@@ -204,7 +206,7 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
         total,
         pages: Math.ceil(total / limitNum),
         /** The count stopped at countCap: there are at least `total` matches. */
-        totalCapped: total >= config.countCap,
+        totalCapped: config.countCap > 0 && total >= config.countCap,
       },
     });
   } catch (err) {

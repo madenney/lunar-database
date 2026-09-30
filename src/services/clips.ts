@@ -162,7 +162,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
  * ("best") or `startAt`. Stage, source, dates, damage and move filters ride
  * along. Without these a sorted search scans all ~27M clips (measured: 280 s).
  */
-export const CLIP_INDEXES = [
+export const CLIP_INDEXES: { key: Record<string, 1 | -1>; name: string; partialFilterExpression?: Record<string, unknown> }[] = [
   { key: { type: 1, rank: -1 }, name: "type_rank" },
   { key: { type: 1, startAt: -1 }, name: "type_date" },
   { key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, rank: -1 }, name: "type_chars_rank" },
@@ -172,5 +172,12 @@ export const CLIP_INDEXES = [
   { key: { type: 1, "attacker.connectCode": 1, startAt: -1 }, name: "type_attCode_date" },
   { key: { type: 1, "victim.connectCode": 1, rank: -1 }, name: "type_vicCode_rank" },
   { key: { type: 1, didKill: 1, startPercent: 1, rank: -1 }, name: "type_kill_start_rank" },
+  // Zero-to-deaths by character/matchup: only those clips (a few % of combos).
+  // Without it "Falco zero-to-deaths" scanned for 8.6 s.
+  {
+    key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, rank: -1 },
+    name: "ztd_chars_rank",
+    partialFilterExpression: { didKill: true, startPercent: 0 },
+  },
   { key: { replayId: 1 }, name: "replayId" },
-] as const;
+];

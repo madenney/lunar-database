@@ -122,7 +122,7 @@ async function main() {
     console.log("Creating indexes…");
     // Every search the API allows starts with `type` and an equality on one of
     // these, then sorts by rank ("best") or startAt; see routes/clips.ts.
-    await build.createIndexes(CLIP_INDEXES.map((i) => ({ key: { ...i.key }, name: i.name })));
+    await build.createIndexes(CLIP_INDEXES);
     if (todo.length < shards.length) {
       console.log(`Partial build (${todo.length} shards) left in "${BUILD}"; live "${LIVE}" not replaced.`);
     } else {

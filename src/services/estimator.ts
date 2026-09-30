@@ -82,10 +82,8 @@ async function computeCountAndSize(
   // docs just to size a slice; the worker streams the exact first-N when it builds
   // the real bundle.
   //
-  // Counting stops at config.countCap matches: past that a selection is far
-  // over the per-bundle size cap anyway, and scanning every one of 1.5M Fox
-  // games cost ~1.7 s of MongoDB per request (the launch load test's
-  // bottleneck). `capped` says the totals are "at least".
+  // Count and sizes come from one scan (results cached, services/queryCache.ts).
+  // COUNT_CAP can stop it early and report "at least" totals; off by default.
   const groupFields: any = {
     _id: null,
     n: { $sum: 1 },
@@ -95,10 +93,11 @@ async function computeCountAndSize(
     groupFields.totalDuration = { $sum: { $ifNull: ["$duration", 0] } };
   }
 
-  const agg = await Replay.aggregate([{ $match: query }, { $limit: config.countCap }, { $group: groupFields }]).option({ maxTimeMS: 15000, ...(hint ? { hint } : {}) });
+  const pipeline: any[] = [{ $match: query }, ...(config.countCap > 0 ? [{ $limit: config.countCap }] : []), { $group: groupFields }];
+  const agg = await Replay.aggregate(pipeline).option({ maxTimeMS: 20000, ...(hint ? { hint } : {}) });
 
   const totalCount = agg[0]?.n ?? 0;
-  const capped = totalCount >= config.countCap;
+  const capped = config.countCap > 0 && totalCount >= config.countCap;
   const totalSize = agg[0]?.totalSize ?? 0;
   const totalDuration = wantDuration ? (agg[0]?.totalDuration ?? 0) : 0;
 
