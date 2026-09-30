@@ -193,7 +193,8 @@ export class BundleStopped extends Error {}
  * cache (or a fresh compression) straight into a streaming zip that is
  * uploaded to `key` as it grows. Nothing but the occasional freshly-compressed
  * file touches local disk, so bundle size is limited only by storage (R2: 5 TB).
- * Same archive as createBundle: stored .slpz entries plus lunar-manifest.json.
+ * Same archive as createBundle: stored .slpz entries plus lunar-manifest.json,
+ * except that replays slpz can't compress go in as their original .slp.
  */
 export async function streamBundle(
   entries: BundleEntry[],
@@ -201,7 +202,7 @@ export async function streamBundle(
   key: string,
   expectedBytes: number,
   hooks: StreamBundleHooks = {}
-): Promise<{ size: number; cacheHits: number; files: number }> {
+): Promise<{ size: number; cacheHits: number; files: number; rawFallbacks: number }> {
   const zip = new ZipStreamWriter();
   let uploaded = 0;
   let added = 0;
@@ -219,11 +220,12 @@ export async function streamBundle(
   const slpzRoot = config.slpzArchiveDir;
   const manifest: BundleManifest = { version: BUNDLE_MANIFEST_VERSION, replays: [] };
   let cacheHits = 0;
+  let rawFallbacks = 0;
   try {
     for (const [i, entry] of entries.entries()) {
       if (uploadError) throw uploadError;
       const fp = typeof entry === "string" ? entry : entry.filePath;
-      const name = `${i}_${path.basename(fp, ".slp")}.slpz`;
+      let name = `${i}_${path.basename(fp, ".slp")}.slpz`;
       const relFromRoot = path.relative(path.resolve(config.slpRootDir), fp);
       const cached =
         slpzRoot && relFromRoot && !relFromRoot.startsWith("..") ? path.join(slpzRoot, relFromRoot.replace(/\.slp$/i, ".slpz")) : null;
@@ -236,12 +238,21 @@ export async function streamBundle(
           await fsp.mkdir(freshDir, { recursive: true });
           const out = path.join(freshDir, name);
           await execFileAsync(config.slpzBinary, ["-x", "-o", out, fp], { timeout: config.slpzTimeoutMinutes * 60 * 1000, killSignal: "SIGKILL" });
-          await zip.addFile(name, out);
-          if (cached) {
-            await fsp.mkdir(path.dirname(cached), { recursive: true }).catch(() => {});
-            await fsp.copyFile(out, cached).catch(() => {});
+          if (fs.existsSync(out)) {
+            await zip.addFile(name, out);
+            if (cached) {
+              await fsp.mkdir(path.dirname(cached), { recursive: true }).catch(() => {});
+              await fsp.copyFile(out, cached).catch(() => {});
+            }
+            await fsp.unlink(out).catch(() => {});
+          } else {
+            // slpz refuses some valid recordings (e.g. never finalized: raw length 0)
+            // and exits 0 without writing anything. Ship the original .slp instead
+            // of silently dropping the game, as bundles used to.
+            name = `${i}_${path.basename(fp)}`;
+            await zip.addFile(name, fp);
+            rawFallbacks++;
           }
-          await fsp.unlink(out).catch(() => {});
         }
       } catch (err) {
         if (uploadError) throw uploadError;
@@ -267,7 +278,7 @@ export async function streamBundle(
     await uploading;
     if (uploadError) throw uploadError;
     hooks.onProgress?.(added, entries.length, zip.bytesWritten);
-    return { size: zip.bytesWritten, cacheHits, files: added };
+    return { size: zip.bytesWritten, cacheHits, files: added, rawFallbacks };
   } catch (err) {
     zip.stream.destroy();
     await upload.abort().catch(() => {});

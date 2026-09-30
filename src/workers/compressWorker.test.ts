@@ -77,6 +77,25 @@ describe("compressWorker streaming bundles", () => {
     expect(names).toBe("0_g0.slpz 1_g1.slpz 2_g2.slpz lunar-manifest.json");
   });
 
+  it("ships the original .slp when slpz can't compress a game, instead of dropping it", async () => {
+    await seed(2);
+    fs.unlinkSync(path.join(root, "g1.slpz")); // cache miss
+    const saved = config.slpzBinary;
+    (config as any).slpzBinary = "/bin/true"; // like slpz on a never-finalized recording: exits 0, writes nothing
+    try {
+      const job = await Job.create({ filter: { p1ConnectCode: "S#1" }, createdBy: "c", estimatedSize: 2000, replayCount: 2 });
+      await processNextCompression();
+      expect((await Job.findById(job._id).lean())!).toMatchObject({ status: "completed", replayCount: 2 });
+      const zipPath = path.join(os.tmpdir(), `${job._id}.zip`);
+      fs.writeFileSync(zipPath, uploaded!);
+      const names = execFileSync("python3", ["-c", "import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1]); m=json.loads(z.read('lunar-manifest.json')); print(' '.join(sorted(r['file'] for r in m['replays'])))", zipPath]).toString().trim();
+      fs.unlinkSync(zipPath);
+      expect(names).toBe("0_g0.slpz 1_g1.slp");
+    } finally {
+      (config as any).slpzBinary = saved;
+    }
+  });
+
   it("puts the job back in line after a network error instead of failing it", async () => {
     await seed(2);
     failUpload = new Error("write EPROTO wrong version number");

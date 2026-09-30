@@ -137,7 +137,7 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
     const expectedBytes = Math.round(rawSize / 8) + entries.length * 128;
     let timedOut = false;
     let lastProgressWrite = 0;
-    const { size, cacheHits, files } = await streamBundle(entries, jobId, key, expectedBytes, {
+    const { size, cacheHits, files, rawFallbacks } = await streamBundle(entries, jobId, key, expectedBytes, {
       onProgress: (added, total, uploaded) => {
         // Best-effort and throttled; never slows the build.
         if (Date.now() - lastProgressWrite < 2000 && added < total) return;
@@ -168,7 +168,7 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
       `Job ${jobId} streamed to storage: ${files} files ` +
-      `(${cacheHits} from slpz cache, ${files - cacheHits} fresh), ` +
+      `(${cacheHits} from slpz cache, ${files - cacheHits - rawFallbacks} fresh, ${rawFallbacks} as raw .slp), ` +
       `${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );
   } catch (err) {
