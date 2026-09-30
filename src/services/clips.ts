@@ -12,6 +12,21 @@ import type { ComboRow, EdgeguardRow, EarlyQuitOutRow, MoveRow } from "./gameSta
 
 export const MIN_COMBO_MOVES = 4;
 
+/**
+ * Wobbles, chain-grab infinites and similar: a long string where one move is
+ * most of the hits. They dominate "most damage"/"most moves" and are hidden by
+ * default in search (user decision 2026-09-30); `infinite` marks them.
+ */
+export const INFINITE_MIN_MOVES = 12;
+export const INFINITE_MOVE_SHARE = 0.6;
+
+export function isInfinite(moveList: MoveRow[]): boolean {
+  if (moveList.length < INFINITE_MIN_MOVES) return false;
+  const counts = new Map<number, number>();
+  for (const [moveId] of moveList) counts.set(moveId, (counts.get(moveId) ?? 0) + 1);
+  return Math.max(...counts.values()) / moveList.length >= INFINITE_MOVE_SHARE;
+}
+
 export type ClipType = "combo" | "edgeguard" | "quitout";
 
 export interface ClipPlayer {
@@ -47,6 +62,8 @@ export interface ClipDoc {
   score: number | null;
   /** "Best first" sort key for every type: damage for combos and quit-outs, score for edgeguards. */
   rank: number;
+  /** One move repeated for most of a long string (wobbles, infinites); see isInfinite. */
+  infinite: boolean;
   metrics: Record<string, unknown> | null;
   detail: { run: string; extractor: "clipper"; version: number; shard: string };
 }
@@ -107,6 +124,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       moveList,
       score: null,
       rank: endPct == null ? 0 : round1(endPct - startPct)!,
+      infinite: isInfinite(moveList),
       metrics: null,
     });
   }
@@ -128,6 +146,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       moveList: [],
       score: score == null ? null : round1(score),
       rank: score == null ? 0 : round1(score)!,
+      infinite: false,
       metrics: metrics ?? null,
     });
   }
@@ -150,6 +169,7 @@ export function clipsFromLine(line: ClipperLine, replay: ClipReplay, detail: Cli
       moveList,
       score: null,
       rank: round1(pctAtQuit - startPct)!,
+      infinite: isInfinite(moveList),
       metrics: null,
     });
   }
@@ -167,6 +187,16 @@ export const CLIP_INDEXES: { key: Record<string, 1 | -1>; name: string; partialF
   { key: { type: 1, startAt: -1 }, name: "type_date" },
   { key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, rank: -1 }, name: "type_chars_rank" },
   { key: { type: 1, "attacker.characterId": 1, startAt: -1 }, name: "type_attChar_date" },
+  // Newest-first (the default sort) for matchups, opponent-only and zero-to-death.
+  { key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, startAt: -1 }, name: "type_chars_date" },
+  { key: { type: 1, "victim.characterId": 1, startAt: -1 }, name: "type_vicChar_date" },
+  { key: { type: 1, "victim.connectCode": 1, startAt: -1 }, name: "type_vicCode_date" },
+  {
+    key: { type: 1, "attacker.characterId": 1, "victim.characterId": 1, startAt: -1 },
+    name: "ztd_chars_date",
+    partialFilterExpression: { didKill: true, startPercent: 0 },
+  },
+  { key: { type: 1, didKill: 1, startPercent: 1, startAt: -1 }, name: "type_kill_start_date" },
   { key: { type: 1, "victim.characterId": 1, rank: -1 }, name: "type_vicChar_rank" },
   { key: { type: 1, "attacker.connectCode": 1, rank: -1 }, name: "type_attCode_rank" },
   { key: { type: 1, "attacker.connectCode": 1, startAt: -1 }, name: "type_attCode_date" },

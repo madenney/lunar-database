@@ -1,4 +1,4 @@
-import { clipsFromLine, type ClipReplay } from "./clips";
+import { clipsFromLine, isInfinite, type ClipReplay } from "./clips";
 import type { MoveRow } from "./gameStats";
 
 const detail = { run: "main", extractor: "clipper" as const, version: 1, shard: "main-abc" };
@@ -62,5 +62,16 @@ describe("clipsFromLine", () => {
     const line = { r: "x", combos: [[0, 1, 100, 200, 10, 60, 1, moves(4)]] as any };
     expect(clipsFromLine(line, { ...replay, usable: false }, detail)).toEqual([]);
     expect(clipsFromLine(line, { ...replay, players: [...replay.players!, { playerIndex: 2, characterId: 20 }] }, detail)).toEqual([]);
+  });
+});
+
+describe("isInfinite", () => {
+  const rep = (ids: number[]): MoveRow[] => ids.map((id, i) => [id, i * 10, 1, 1]);
+  it("flags long strings of one repeated move, not ordinary combos", () => {
+    expect(isInfinite(rep(Array(20).fill(52)))).toBe(true); // wobble: pummel over and over
+    expect(isInfinite(rep([...Array(9).fill(52), 1, 2, 3]))).toBe(true); // 9 of 12 the same move
+    expect(isInfinite(rep([...Array(6).fill(52), 1, 2, 3, 4, 5, 6]))).toBe(false); // half: a normal string
+    expect(isInfinite(rep([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))).toBe(false);
+    expect(isInfinite(rep(Array(8).fill(52)))).toBe(false); // too short to count
   });
 });

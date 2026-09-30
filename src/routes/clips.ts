@@ -7,8 +7,8 @@
  *     attackerCharacterId, victimCharacterId,               comma lists or arrays (max 20)
  *     attackerConnectCode, victimConnectCode,
  *     stageId, source, startDate, endDate,
- *     minDamage, minMoves, killOnly, zeroToDeath,
- *     sort: "best" | "newest" | "oldest", page, limit (max 100) }
+ *     minDamage, minMoves, killOnly, zeroToDeath, includeInfinites,
+ *     sort: "newest" (default) | "best" | "oldest", page, limit (max 100) }
  * -> { results, total, capped, page, limit }
  *
  * Every query starts with `type` and is served by an index (services/clips.ts
@@ -93,7 +93,11 @@ export function parseClipSearch(body: Record<string, unknown>): ClipSearch | { e
     filter.didKill = true;
   }
 
-  const sortName = body.sort === "newest" || body.sort === "oldest" ? body.sort : "best";
+  // Hidden unless asked for: wobbles and one-move infinites (services/clips.ts isInfinite).
+  if (!(body.includeInfinites === true || body.includeInfinites === "true")) filter.infinite = { $ne: true };
+
+  // Newest first by default (user decision 2026-09-30); "best" = most damage / best score.
+  const sortName = body.sort === "best" || body.sort === "oldest" ? body.sort : "newest";
   const sort: Record<string, 1 | -1> = sortName === "best" ? { rank: -1 } : { startAt: sortName === "newest" ? -1 : 1 };
   // Oldest-first would otherwise open with every undated (ranked) clip.
   if (sortName === "oldest") filter.startAt = { ...(filter.startAt as object), $ne: null };
@@ -106,7 +110,7 @@ export function parseClipSearch(body: Record<string, unknown>): ClipSearch | { e
 const RESULT_FIELDS = {
   replayId: 1, type: 1, startFrame: 1, endFrame: 1, gameFrames: 1, stageId: 1, source: 1, startAt: 1,
   attacker: 1, victim: 1, startPercent: 1, endPercent: 1, damage: 1, moves: 1, didKill: 1,
-  moveList: 1, score: 1, rank: 1, metrics: 1,
+  moveList: 1, score: 1, rank: 1, metrics: 1, infinite: 1,
 };
 
 router.post("/", clipsLimiter, async (req: Request, res: Response) => {

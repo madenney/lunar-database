@@ -64,6 +64,7 @@ async function main() {
   if (APPLY) await build.drop().catch(() => {});
 
   const counts: Record<string, number> = { combo: 0, edgeguard: 0, quitout: 0 };
+  let infinites = 0;
   let games = 0;
   let skippedGames = 0;
   let bytes = 0;
@@ -97,7 +98,10 @@ async function main() {
         continue;
       }
       const clips = clipsFromLine(line, replay as any, detail);
-      for (const c of clips) counts[c.type]++;
+      for (const c of clips) {
+        counts[c.type]++;
+        if (c.infinite) infinites++;
+      }
       docs.push(...clips);
     }
     if (APPLY) for (let j = 0; j < docs.length; j += 5000) await build.insertMany(docs.slice(j, j + 5000), { ordered: false });
@@ -112,7 +116,7 @@ async function main() {
     }
   }
   const total = counts.combo + counts.edgeguard + counts.quitout;
-  console.log(`${games.toLocaleString()} games read (${skippedGames} without a replay), ${total.toLocaleString()} clips.`);
+  console.log(`${games.toLocaleString()} games read (${skippedGames} without a replay), ${total.toLocaleString()} clips, ${infinites.toLocaleString()} marked infinite (hidden by default).`);
   if (todo.length < shards.length) {
     const scale = shards.length / todo.length;
     console.log(`Projected for all ${shards.length} shards: ~${Math.round((total * scale) / 1e6)}M clips, ~${((bytes * scale) / 1e9).toFixed(0)} GB as JSON.`);
@@ -137,6 +141,7 @@ async function main() {
       partial: todo.length < shards.length,
       games,
       counts,
+      infinites,
       storageBytes: stats.storageSize,
       indexBytes: stats.totalIndexSize,
       minutes: (Date.now() - started) / 60000,

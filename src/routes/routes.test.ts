@@ -628,7 +628,7 @@ describe("POST /api/clips", () => {
       clip({ rank: 200, attacker: { port: 0, characterId: 20, connectCode: "CCC#3", displayName: "Cc" } }), // Falco: excluded
       clip({ type: "edgeguard", rank: 50 }), // other type: excluded
     ]);
-    const { status, body } = await post("/api/clips", { type: "combo", attackerCharacterId: "2", victimCharacterId: "9", killOnly: true });
+    const { status, body } = await post("/api/clips", { type: "combo", attackerCharacterId: "2", victimCharacterId: "9", killOnly: true, sort: "best" });
     expect(status).toBe(200);
     expect(body).toMatchObject({ total: 2, capped: false, page: 1 });
     expect(body.results.map((c: any) => c.rank)).toEqual([120, 80]);
