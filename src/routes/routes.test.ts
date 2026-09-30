@@ -688,6 +688,46 @@ describe("explicit replay-list exports (replayIds)", () => {
   });
 });
 
+describe("clip-search exports (the games behind a clip search)", () => {
+  const A = { "X-Client-Id": "e5e5e5e5-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const B = { "X-Client-Id": "f6f6f6f6-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const clips = () => mongoose.connection.collection("clips");
+  afterEach(async () => {
+    await clips().deleteMany({});
+  });
+  const setup = async () => {
+    const g1 = await Replay.create({ filePath: "/test/cs1.slp", fileHash: "cs1", fileSize: 1000, stageId: 31, players: [{ playerIndex: 0, characterId: 2 }] });
+    const g2 = await Replay.create({ filePath: "/test/cs2.slp", fileHash: "cs2", fileSize: 2000, stageId: 31, players: [{ playerIndex: 0, characterId: 2 }] });
+    const other = await Replay.create({ filePath: "/test/cs3.slp", fileHash: "cs3", fileSize: 4000, stageId: 31, players: [{ playerIndex: 0, characterId: 9 }] });
+    const clip = (replayId: unknown, characterId: number) => ({
+      replayId, type: "combo", startAt: new Date(), didKill: true, startPercent: 0, rank: 50, infinite: false,
+      attacker: { port: 0, characterId }, victim: { port: 1, characterId: 20 },
+    });
+    // Two Fox clips in g1 (one game, counted once), one in g2, a Marth clip elsewhere.
+    await clips().insertMany([clip(g1._id, 2), clip(g1._id, 2), clip(g2._id, 2), clip(other._id, 9)]);
+  };
+
+  it("estimates the distinct games behind the search", async () => {
+    await setup();
+    const est = await post("/api/replays/estimate", { clipSearch: { type: "combo", attackerCharacterId: ["2"] } }, A);
+    expect(est.status).toBe(200);
+    expect(est.body).toMatchObject({ replayCount: 2, rawSize: 3000 });
+  });
+
+  it("creates a job that stores the search, and the same search reuses it", async () => {
+    await setup();
+    const first = await post("/api/jobs", { clipSearch: { type: "combo", attackerCharacterId: "2", sort: "best" } }, A);
+    expect(first.status).toBe(201);
+    const job = await Job.findById(first.body.jobId).lean();
+    expect(JSON.parse(job!.filter.clipSearch!)).toEqual({ attackerCharacterId: ["2"], type: "combo" });
+    expect(job!.replayCount).toBe(2);
+    const again = await post("/api/jobs", { clipSearch: { attackerCharacterId: ["2"], type: "combo" } }, B);
+    expect(again.body).toMatchObject({ jobId: first.body.jobId, reused: true });
+    const { body } = await get("/api/jobs/queue");
+    expect(body.waiting[0].filter).toEqual({ clipSearch: { attackerCharacterId: ["2"], type: "combo" } });
+  });
+});
+
 describe("count cap", () => {
   it("stops counting at countCap and says so, in search and estimate", async () => {
     const { config } = await import("../config");

@@ -2,6 +2,8 @@ import { Replay } from "../models/Replay";
 import { resolveSelection, ReplaySearchParams } from "./replaySearchQuery";
 import { config } from "../config";
 import { heavyQueries, paramsKey } from "./queryCache";
+import { clipSearchReplayIds } from "./clipSearch";
+import mongoose from "mongoose";
 
 /**
  * Per-file throughput used for ETA estimates (files per second).
@@ -41,6 +43,7 @@ async function computeCountAndSize(
   filter: ReplaySearchParams,
   options?: { includeDuration?: boolean }
 ): Promise<{ count: number; rawSize: number; totalDurationFrames: number; capped?: boolean }> {
+  if (filter.clipSearch) return clipSearchCountAndSize(filter);
   const { query, sortObj, hint } = await resolveSelection(filter);
   const maxFiles = filter.maxFiles != null && Number(filter.maxFiles) > 0 ? Number(filter.maxFiles) : undefined;
   const maxSizeMb = filter.maxSizeMb != null && Number(filter.maxSizeMb) > 0 ? Number(filter.maxSizeMb) : undefined;
@@ -112,6 +115,26 @@ async function computeCountAndSize(
     // A limit below the cap makes the (averaged) totals a real estimate again.
     capped: capped && (maxFiles == null || maxFiles >= config.countCap),
   };
+}
+
+/** Count and size of the games behind a clip search, summed batch by batch. */
+async function clipSearchCountAndSize(filter: ReplaySearchParams) {
+  let count = 0;
+  let rawSize = 0;
+  let totalDurationFrames = 0;
+  for await (const ids of clipSearchReplayIds(filter.clipSearch!)) {
+    const [agg] = await Replay.aggregate([
+      { $match: { _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) }, usable: true } },
+      { $group: { _id: null, n: { $sum: 1 }, size: { $sum: "$fileSize" }, dur: { $sum: { $ifNull: ["$duration", 0] } } } },
+    ]);
+    count += agg?.n ?? 0;
+    rawSize += agg?.size ?? 0;
+    totalDurationFrames += agg?.dur ?? 0;
+  }
+  const maxFiles = filter.maxFiles != null && Number(filter.maxFiles) > 0 ? Number(filter.maxFiles) : undefined;
+  if (maxFiles == null || maxFiles >= count) return { count, rawSize, totalDurationFrames, capped: false };
+  const ratio = maxFiles / count;
+  return { count: maxFiles, rawSize: Math.round(rawSize * ratio), totalDurationFrames: Math.round(totalDurationFrames * ratio), capped: false };
 }
 
 /**

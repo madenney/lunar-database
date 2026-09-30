@@ -9,6 +9,7 @@ import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
 import { queueGate, pauseForStorageCap, type Lane } from "../services/jobQueue";
+import { clipSearchReplayIds } from "../services/clipSearch";
 
 /** Network/TLS failures worth retrying (seen in production: EPROTO, ENETUNREACH, resets). */
 const TRANSIENT = /EPROTO|ENETUNREACH|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|EPIPE|timed? ?out/i;
@@ -73,26 +74,36 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
     const maxBytes = job.filter.maxSizeMb != null && job.filter.maxSizeMb > 0 ? Number(job.filter.maxSizeMb) * 1024 * 1024 : Infinity;
     const ordered = maxFiles !== Infinity || maxBytes !== Infinity;
 
-    const { query: cursorQuery, sortObj, hint } = await resolveSelection(job.filter);
-
-    let find = Replay.find(cursorQuery).select("filePath fileSize fileHash");
-    if (hint) find = find.hint(hint);
-    if (ordered) find = find.sort(sortObj);
-    const cursor = find.lean().cursor();
-
     const entries: BundleEntry[] = [];
     let rawSize = 0;
-    for await (const r of cursor) {
-      if (entries.length >= maxFiles) break;
-      const size = (r as any).fileSize ?? 0;
+    /** Add one replay; false once a limit is reached. */
+    const take = (r: any): boolean => {
+      if (entries.length >= maxFiles) return false;
+      const size = r.fileSize ?? 0;
       // Always include at least one file, then stop before exceeding the budget.
-      if (entries.length > 0 && rawSize + size > maxBytes) break;
-      const fp = path.join(resolvedRoot, (r as any).filePath);
-      if (!fp.startsWith(resolvedRoot + path.sep)) continue; // guard path traversal
-      entries.push({ filePath: fp, replayId: String((r as any)._id), fileHash: (r as any).fileHash });
+      if (entries.length > 0 && rawSize + size > maxBytes) return false;
+      const fp = path.join(resolvedRoot, r.filePath);
+      if (!fp.startsWith(resolvedRoot + path.sep)) return true; // guard path traversal
+      entries.push({ filePath: fp, replayId: String(r._id), fileHash: r.fileHash });
       rawSize += size;
+      return true;
+    };
+
+    if (job.filter.clipSearch) {
+      // The games behind a clip search, found in batches (any number of them).
+      outer: for await (const ids of clipSearchReplayIds(job.filter.clipSearch)) {
+        const docs = await Replay.find({ _id: { $in: ids }, usable: true }).select("filePath fileSize fileHash").lean();
+        for (const r of docs) if (!take(r)) break outer;
+      }
+    } else {
+      const { query: cursorQuery, sortObj, hint } = await resolveSelection(job.filter);
+      let find = Replay.find(cursorQuery).select("filePath fileSize fileHash");
+      if (hint) find = find.hint(hint);
+      if (ordered) find = find.sort(sortObj);
+      const cursor = find.lean().cursor();
+      for await (const r of cursor) if (!take(r)) break;
+      await cursor.close();
     }
-    await cursor.close();
 
     if (entries.length === 0) {
       await Job.updateOne(

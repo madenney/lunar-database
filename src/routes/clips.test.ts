@@ -1,4 +1,6 @@
 import { parseClipSearch } from "./clips";
+import { canonicalClipSearch } from "../services/clipSearch";
+import { buildReplaySearchQuery } from "../services/replaySearchQuery";
 
 describe("parseClipSearch", () => {
   it("requires a known type", () => {
@@ -36,5 +38,22 @@ describe("parseClipSearch", () => {
 
   it("caps limit and page", () => {
     expect(parseClipSearch({ type: "combo", limit: 5000, page: 99999 })).toMatchObject({ limit: 100, page: 400 });
+  });
+});
+
+describe("canonicalClipSearch", () => {
+  it("keeps only the fields that select clips, sorted, so equal searches match", () => {
+    const a = canonicalClipSearch({ type: "combo", victimCharacterId: ["9", "2"], attackerCharacterId: "2", sort: "best", page: 3, killOnly: true });
+    const b = canonicalClipSearch({ killOnly: true, attackerCharacterId: "2", victimCharacterId: [2, 9], type: "combo" });
+    expect(a).toBe(b);
+    expect(JSON.parse(a!)).toEqual({ attackerCharacterId: ["2"], killOnly: true, type: "combo", victimCharacterId: ["2", "9"] });
+  });
+  it("rejects invalid searches and operator objects", () => {
+    expect(canonicalClipSearch({ type: "nope" })).toBeNull();
+    expect(canonicalClipSearch({ type: "combo", attackerConnectCode: { $ne: null } })).toBeNull();
+    expect(canonicalClipSearch("combo")).toBeNull();
+  });
+  it("can never be turned into an ordinary replay query by mistake", () => {
+    expect(() => buildReplaySearchQuery({ clipSearch: "{}" })).toThrow(/clip-search/);
   });
 });

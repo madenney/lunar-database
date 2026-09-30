@@ -1,6 +1,16 @@
 import { IJobFilter } from "../models/Job";
 import { REPLAY_SOURCES } from "../models/Replay";
 import { MAX_LIST_VALUES, RANK_KEYS, tournamentKeys, replayIdList } from "./replaySearchQuery";
+import { canonicalClipSearch } from "./clipSearch";
+
+function safeJson(s: string): unknown {
+  if (s.length > 4000) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
 const MAX_FILTER_STRING_LEN = 100;
 /** Largest byte budget a job may request. The estimator relies on this bound. */
@@ -31,6 +41,17 @@ function safeList(val: unknown): string | undefined {
  */
 export function parseFilter(body: Record<string, any>): IJobFilter {
   const filter: IJobFilter = {};
+  // The games behind a clip search: that search alone selects the replays (other
+  // replay filters don't apply); a limit and its sort still can.
+  if (body.clipSearch != null) {
+    const raw = typeof body.clipSearch === "string" ? safeJson(body.clipSearch) : body.clipSearch;
+    const canonical = canonicalClipSearch(raw);
+    if (canonical) {
+      filter.clipSearch = canonical;
+      if (body.maxFiles != null && Number.isFinite(Number(body.maxFiles)) && Number(body.maxFiles) >= 1) filter.maxFiles = Math.floor(Number(body.maxFiles));
+      return filter;
+    }
+  }
   const p1cc = safeList(body.p1ConnectCode); if (p1cc) filter.p1ConnectCode = p1cc;
   const p1ci = safeList(body.p1CharacterId); if (p1ci) filter.p1CharacterId = p1ci;
   const p1dn = safeList(body.p1DisplayName); if (p1dn) filter.p1DisplayName = p1dn;

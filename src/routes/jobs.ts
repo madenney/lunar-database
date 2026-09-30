@@ -147,7 +147,9 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     // filter narrows it; for a limit-only job the uncapped total is the entire DB,
     // so skip that (potentially full-collection) count.
     let totalMatched = count;
-    if (hasLimit && hasFilter) {
+    if (hasLimit && hasFilter && filter.clipSearch) {
+      totalMatched = (await queryCountAndSize({ clipSearch: filter.clipSearch })).count;
+    } else if (hasLimit && hasFilter) {
       const { query, hint } = await resolveSelection(filter);
       totalMatched = await Replay.countDocuments(query, hint ? { hint } : {}).maxTimeMS(15000);
     }
@@ -252,9 +254,21 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
 
 /** A job filter for public responses: an explicit id list becomes its count. */
 export function publicFilter(f: Record<string, any> | null | undefined) {
-  if (!f || !Array.isArray(f.replayIds)) return f;
-  const { replayIds, ...rest } = f;
-  return { ...rest, replayIdCount: replayIds.length };
+  if (!f) return f;
+  let out: Record<string, any> = f;
+  if (Array.isArray(f.replayIds)) {
+    const { replayIds, ...rest } = out;
+    out = { ...rest, replayIdCount: replayIds.length };
+  }
+  // A clip-search export shows the search itself (it's short), parsed.
+  if (typeof out.clipSearch === "string") {
+    try {
+      out = { ...out, clipSearch: JSON.parse(out.clipSearch) };
+    } catch {
+      /* leave as is */
+    }
+  }
+  return out;
 }
 
 const queueLimiter = createRateLimiter({

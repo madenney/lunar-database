@@ -29,6 +29,9 @@ export interface ReplaySearchParams {
   tournament?: string;
   /** Exactly these replays (24-hex ids, e.g. the games behind chosen clips). Combines with any other field. */
   replayIds?: string[];
+  /** The games behind a clip search (services/clipSearch.ts canonicalClipSearch). Resolved
+   *  in batches by the estimator and bundler, never through buildReplaySearchQuery. */
+  clipSearch?: string;
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -142,7 +145,7 @@ function rankTierNames(param: string | undefined): string[] {
 const TOURNAMENT_KEY_RE = /^[a-z0-9-]{1,80}$/;
 const REPLAY_ID_RE = /^[0-9a-f]{24}$/;
 /** Most replays one explicit-list export may name (Phase 2 of docs/clip-search.md). */
-export const MAX_REPLAY_IDS = 10_000;
+export const MAX_REPLAY_IDS = 100_000;
 
 /** Valid, de-duplicated replay ids (lowercase hex) from an array or comma list, capped. */
 export function replayIdList(v: unknown): string[] {
@@ -170,6 +173,9 @@ function prefixMatch(match: Record<string, any>, prefix: string): Record<string,
 }
 
 export function buildReplaySearchQuery(params: ReplaySearchParams): Record<string, any> {
+  // A clip-search selection is not expressible as one replay query; selecting
+  // everything by mistake would be far worse than failing.
+  if (params.clipSearch) throw new Error("clip-search selections resolve through clipSearchReplayIds, not a replay query");
   // Exclude junk replays. This used to inline the NOT_JUNK_QUERY predicate, but none
   // of it is indexable, so Mongo had to fetch every candidate doc just to re-check
   // it — ~1.6s of a ~2.5s estimate on a 2M-row filter, to drop 0.5% of rows. It's

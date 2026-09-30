@@ -119,8 +119,8 @@ async function main() {
       ...(process.env.NODE_ENV === "development" ? ["http://localhost:3000", "http://localhost:3001"] : []),
     ],
   }));
-  // 1 MB: an explicit-list export can name up to 10,000 replay ids (~270 KB).
-  app.use(express.json({ limit: "1mb" }));
+  // 4 MB: an explicit-list export can name up to 100,000 replay ids (~2.7 MB).
+  app.use(express.json({ limit: "4mb" }));
 
   // Recognise the website (shared service key) before anything reads identity
   // headers or rate-limits; untrusted callers lose X-Client-Id once a key is set.

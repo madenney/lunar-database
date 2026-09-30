@@ -96,6 +96,20 @@ describe("compressWorker streaming bundles", () => {
     }
   });
 
+  it("bundles the distinct games behind a clip search", async () => {
+    await seed(3);
+    const replays = await Replay.find().sort({ filePath: 1 }).lean();
+    const clip = (r: any) => ({ replayId: r._id, type: "combo", attacker: { port: 0, characterId: 2 }, victim: { port: 1, characterId: 9 }, startAt: new Date(), rank: 1, infinite: false });
+    await mongoose.connection.collection("clips").insertMany([clip(replays[0]), clip(replays[0]), clip(replays[2])]);
+    try {
+      const job = await Job.create({ filter: { clipSearch: JSON.stringify({ type: "combo", attackerCharacterId: "2" }) }, createdBy: "c", estimatedSize: 2000, replayCount: 2 });
+      await processNextCompression();
+      expect((await Job.findById(job._id).lean())!).toMatchObject({ status: "completed", replayCount: 2 });
+    } finally {
+      await mongoose.connection.collection("clips").deleteMany({});
+    }
+  });
+
   it("puts the job back in line after a network error instead of failing it", async () => {
     await seed(2);
     failUpload = new Error("write EPROTO wrong version number");

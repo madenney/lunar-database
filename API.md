@@ -369,10 +369,17 @@ The server stores `replayCount`, `totalMatched` (uncapped match count, when a li
 }
 ```
 
-**Explicit lists:** `replayIds` (array of up to 10,000 24-hex replay ids) bundles
+**Explicit lists:** `replayIds` (array of up to 100,000 24-hex replay ids) bundles
 exactly those replays; it combines with any other field. Unknown, unusable or
 hidden-duplicate ids are left out and counted in the response's `missing`. An
 identical list (any order) reuses the same job. The estimate accepts it too.
+
+**Clip-search exports:** `clipSearch` (a clip search as for `POST /api/clips`:
+`type`, characters, codes, stage, source, dates, damage/moves, kill/zero-to-death,
+`includeInfinites`) bundles the distinct games behind every matching clip, with
+no limit; only `maxFiles` may be combined with it. The job stores the canonical
+search, so an equal search (fields in any order, lists as strings or arrays)
+reuses the job. The estimate accepts it too.
 
 `lane` is `fast` for bundles up to `JOB_FAST_LANE_MAX_MB` (1 GB): a second worker
 pair serves only those, so a huge job never blocks small ones.

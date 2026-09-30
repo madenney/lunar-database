@@ -30,7 +30,7 @@ const CACHING = process.env.NODE_ENV !== "test";
 const KEY_FIELDS = [
   "p1ConnectCode", "p1CharacterId", "p1DisplayName", "p1Rank",
   "p2ConnectCode", "p2CharacterId", "p2DisplayName", "p2Rank",
-  "stageId", "startDate", "endDate", "source", "tournament", "maxFiles", "maxSizeMb", "sort",
+  "stageId", "startDate", "endDate", "source", "tournament", "maxFiles", "maxSizeMb", "sort", "clipSearch",
 ] as const;
 
 /** An id list's part of the key: count + hash of the sorted ids (a key stays short at 10,000 ids). */
@@ -51,7 +51,7 @@ export function filterKey(filter: Record<string, unknown>): string {
     let v = filter[k];
     if (v == null || v === "") continue;
     if (k === "sort" && !limited) continue;
-    if (typeof v === "string" && k !== "startDate" && k !== "endDate" && k !== "sort") {
+    if (typeof v === "string" && k !== "startDate" && k !== "endDate" && k !== "sort" && k !== "clipSearch") {
       v = v.split(",").map((s) => s.trim()).filter(Boolean).sort().join(",");
     }
     parts.push(`${k}=${v}`);

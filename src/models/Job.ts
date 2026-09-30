@@ -21,6 +21,8 @@ export interface IJobFilter {
   tournament?: string;
   /** Exactly these replays (an explicit-list export, e.g. from Clipper's chosen clips). */
   replayIds?: string[];
+  /** The games behind a clip search (canonical JSON; see services/clipSearch.ts). */
+  clipSearch?: string;
   /** Comma-joined rank tiers per side (ranked dataset only), e.g. "master". */
   p1Rank?: string;
   p2Rank?: string;
@@ -100,6 +102,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     source: { type: String },
     tournament: { type: String },
     replayIds: { type: [String], default: undefined },
+    clipSearch: { type: String },
     p1Rank: { type: String },
     p2Rank: { type: String },
     maxFiles: { type: Number },
