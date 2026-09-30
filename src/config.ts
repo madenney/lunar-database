@@ -28,11 +28,12 @@ export const config = {
   jobMaxPendingTotal: parseInt(process.env.JOB_MAX_PENDING_TOTAL || "200", 10),
   // Launch-load shaping (services/jobQueue.ts). Bundles estimated at or under
   // fastLaneMaxMb also go to a second worker pair, so a huge job never blocks
-  // small ones. A single job may not exceed jobMaxBundleMb (point people at the
-  // full-DB download instead). An identical request within jobReuseHours joins
+  // small ones. jobMaxBundleMb can cap a single job (off by default: bundles
+  // stream straight to storage, so any size works). An identical request within jobReuseHours joins
   // the existing job or gets its finished bundle instead of building another.
   fastLaneMaxMb: parseInt(process.env.JOB_FAST_LANE_MAX_MB || "1024", 10),
-  jobMaxBundleMb: parseInt(process.env.JOB_MAX_BUNDLE_MB || "20480", 10),
+  /** 0 = no limit (the default since bundles stream straight to storage). */
+  jobMaxBundleMb: parseInt(process.env.JOB_MAX_BUNDLE_MB || "0", 10),
   jobReuseHours: parseInt(process.env.JOB_REUSE_HOURS || "48", 10),
   /** Upload retries for transient network/TLS errors before a job fails. */
   jobUploadMaxAttempts: parseInt(process.env.JOB_UPLOAD_MAX_ATTEMPTS || "3", 10),

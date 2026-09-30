@@ -124,7 +124,7 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
       totalDurationFrames,
       queue: {
         reusable: reusable ? { jobId: reusable._id, status: reusable.status } : null,
-        tooLarge: estimates.estimatedZipSize > maxBytes,
+        tooLarge: maxBytes > 0 && estimates.estimatedZipSize > maxBytes,
         maxBytes,
         lane: forecast.lane,
         ahead: forecast.ahead,

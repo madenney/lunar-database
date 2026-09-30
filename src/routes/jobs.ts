@@ -127,7 +127,7 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
     // One bundle may not be bigger than jobMaxBundleMb: past that, the full-DB
     // download (or a narrower filter) is the right tool.
     const maxBytes = config.jobMaxBundleMb * 1024 * 1024;
-    if (estimates.estimatedZipSize > maxBytes) {
+    if (maxBytes > 0 && estimates.estimatedZipSize > maxBytes) {
       sendApiError(res, 400, "too_large", { estimatedBytes: estimates.estimatedZipSize, maxBytes });
       return;
     }
@@ -287,6 +287,7 @@ router.get("/queue", queueLimiter, async (req: Request, res: Response) => {
       const p = j.progress;
       if (!p) return j.status === "bundled" ? 50 : 0;
       if (p.step === "uploading" && p.bytesTotal) return Math.round(50 + 50 * ((p.bytesUploaded ?? 0) / p.bytesTotal));
+      if (p.step === "bundling" && p.bytesUploaded != null && p.filesTotal) return Math.round(100 * (p.filesProcessed / p.filesTotal));
       return p.filesTotal ? Math.round(50 * (p.filesProcessed / p.filesTotal)) : 0;
     };
     const cleanupMs = config.storageCleanupAfterDays * 86400 * 1000;

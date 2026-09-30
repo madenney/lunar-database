@@ -1,4 +1,5 @@
 import { Job } from "../models/Job";
+import { config } from "../config";
 import { cleanupJobTemp } from "./bundler";
 
 // States where a worker actively holds a job. "bundled" is a queue state (waiting
@@ -21,11 +22,15 @@ const ACTIVE_STATES = ["processing", "bundling", "uploading"] as const;
  */
 export async function reapStuckJobs(stuckAfterMinutes: number): Promise<{ reaped: number }> {
   const cutoff = new Date(Date.now() - stuckAfterMinutes * 60 * 1000);
+  // A job with a deadline (big bundles get more time) is stuck only once it's
+  // past it, plus the same slack; older jobs keep the fixed per-phase limit.
+  const slackMs = Math.max(0, stuckAfterMinutes - config.jobTimeoutMinutes) * 60 * 1000;
   const stuck = await Job.find({
     status: { $in: ACTIVE_STATES },
     $or: [
-      { phaseStartedAt: { $ne: null, $lt: cutoff } },
-      { phaseStartedAt: null, startedAt: { $ne: null, $lt: cutoff } },
+      { deadlineAt: { $ne: null, $lt: new Date(Date.now() - slackMs) } },
+      { deadlineAt: null, phaseStartedAt: { $ne: null, $lt: cutoff } },
+      { deadlineAt: null, phaseStartedAt: null, startedAt: { $ne: null, $lt: cutoff } },
     ],
   })
     .select("_id status startedAt phaseStartedAt")

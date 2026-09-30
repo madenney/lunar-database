@@ -708,15 +708,26 @@ describe("download queue: reuse, sharing, size cap, public queue", () => {
     expect(body).toMatchObject({ jobId: String(done._id), status: "completed", reused: true });
   });
 
-  it("refuses a bundle over the size cap", async () => {
-    // 200 GB raw is ~25 GB of bundle, over the 20 GB default.
+  it("accepts bundles of any size by default, and refuses over a configured cap", async () => {
+    // 200 GB raw is ~25 GB of bundle.
     await Replay.create({ filePath: "/test/big.slp", fileHash: "big", fileSize: 200 * 1024 ** 3, players: [{ playerIndex: 0, connectCode: "BIG#1", characterId: 2, characterName: "Fox" }] });
-    const { status, body } = await post("/api/jobs", { p1ConnectCode: "BIG#1" }, A);
-    expect(status).toBe(400);
-    expect(body.code).toBe("too_large");
-    expect(body.maxBytes).toBe(20480 * 1024 * 1024);
     const est = await post("/api/replays/estimate", { p1ConnectCode: "BIG#1" }, A);
-    expect(est.body.queue).toMatchObject({ tooLarge: true, lane: "main" });
+    expect(est.body.queue).toMatchObject({ tooLarge: false, lane: "main" });
+    const ok = await post("/api/jobs", { p1ConnectCode: "BIG#1" }, A);
+    expect(ok.status).toBe(201);
+    await Job.deleteMany({});
+
+    const { config } = await import("../config");
+    const saved = config.jobMaxBundleMb;
+    config.jobMaxBundleMb = 20480;
+    try {
+      const { status, body } = await post("/api/jobs", { p1ConnectCode: "BIG#1" }, B);
+      expect(status).toBe(400);
+      expect(body.code).toBe("too_large");
+      expect(body.maxBytes).toBe(20480 * 1024 * 1024);
+    } finally {
+      config.jobMaxBundleMb = saved;
+    }
   });
 
   it("forecasts a new download in the estimate and points at an identical one", async () => {

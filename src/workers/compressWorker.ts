@@ -3,11 +3,15 @@ import path from "path";
 import { Job } from "../models/Job";
 import { Replay } from "../models/Replay";
 import { resolveSelection } from "../services/replaySearchQuery";
-import { createBundle, cleanupJobTemp, BundleEntry } from "../services/bundler";
+import { streamBundle, BundleStopped, BundleEntry } from "../services/bundler";
+import { deleteFromStorage, classifyStorageError } from "../services/storage";
 import { isCancelled } from "./utils";
 import { config } from "../config";
 import { sanitizeJobErrorMessage } from "../utils/sanitizeError";
-import { queueGate, type Lane } from "../services/jobQueue";
+import { queueGate, pauseForStorageCap, type Lane } from "../services/jobQueue";
+
+/** Network/TLS failures worth retrying (seen in production: EPROTO, ENETUNREACH, resets). */
+const TRANSIENT = /EPROTO|ENETUNREACH|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|EPIPE|timed? ?out/i;
 
 // Two compressors (services/jobQueue.ts): "main" takes the next job of any size,
 // "fast" only small ones, so one huge bundle can't hold up everyone behind it.
@@ -41,7 +45,12 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
   const jobId = job._id.toString();
   currentJobIds[lane] = jobId;
   const jobStartTime = Date.now();
-  const jobTimeoutMs = config.jobTimeoutMinutes * 60 * 1000;
+  // Big bundles take as long as the upload does: allow at least the configured
+  // timeout, and more for large ones (at a pessimistic 1 MiB/s, a sixth of the
+  // measured home upload), so no legitimate job is cut off.
+  const estBundleBytes = Math.round((job.estimatedSize ?? 0) / 8) + (job.replayCount ?? 0) * 128;
+  const jobTimeoutMs = Math.max(config.jobTimeoutMinutes * 60 * 1000, (estBundleBytes / (1024 * 1024)) * 1000);
+  await Job.updateOne({ _id: job._id }, { deadlineAt: new Date(jobStartTime + jobTimeoutMs) });
 
   /** Check if the overall job timeout has been exceeded */
   function isTimedOut(): boolean {
@@ -122,50 +131,77 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
       return true;
     }
 
-    const { zipPath, size, cacheHits } = await createBundle(entries, jobId, (processed, total) => {
-      // Fire-and-forget progress updates (don't await to avoid slowing the pipeline)
-      Job.updateOne(
-        { _id: job._id, status: "bundling" },
-        { "progress.filesProcessed": processed, "progress.filesTotal": total }
-      ).exec().catch(() => {}); // progress is best-effort
+    // Build and upload in one pass: the zip streams straight to storage, so a
+    // bundle of any size needs no room on local disk.
+    const key = `jobs/${jobId}.zip`;
+    const expectedBytes = Math.round(rawSize / 8) + entries.length * 128;
+    let timedOut = false;
+    let lastProgressWrite = 0;
+    const { size, cacheHits, files } = await streamBundle(entries, jobId, key, expectedBytes, {
+      onProgress: (added, total, uploaded) => {
+        // Best-effort and throttled; never slows the build.
+        if (Date.now() - lastProgressWrite < 2000 && added < total) return;
+        lastProgressWrite = Date.now();
+        Job.updateOne(
+          { _id: job._id, status: "bundling" },
+          { progress: { step: "bundling", filesProcessed: added, filesTotal: total, bytesUploaded: uploaded, bytesTotal: expectedBytes } }
+        ).exec().catch(() => {});
+      },
+      shouldStop: async () => {
+        if (isTimedOut()) return (timedOut = true);
+        return isCancelled(jobId);
+      },
     });
 
-    if (isTimedOut()) {
-      cleanupJobTemp(jobId);
-      throw new Error(`Job timed out after ${config.jobTimeoutMinutes} minutes (after compression)`);
-    }
-
-    // Cancellation checkpoint 2: after compression
-    if (await isCancelled(jobId)) {
-      console.log(`Job ${jobId} cancelled after compression`);
-      cleanupJobTemp(jobId);
-      return true;
-    }
-
-    // Mark bundled only if still bundling — otherwise a cancel raced us; discard
-    // the freshly built bundle instead of letting the uploader pick it up and
-    // bill B2 for a cancelled job (M1).
-    const bundled = await Job.updateOne(
+    // Complete only if still bundling: a cancel that landed at the last moment
+    // wins, and the uploaded object is deleted rather than left billed (M1).
+    const completed = await Job.updateOne(
       { _id: jobId, status: "bundling" },
-      { status: "bundled", bundlePath: zipPath, bundleSize: size, progress: null }
+      { status: "completed", r2Key: key, bundleSize: size, replayCount: files, progress: null, completedAt: new Date() }
     );
-    if (bundled.matchedCount === 0) {
-      console.log(`Job ${jobId} no longer bundling (cancelled?) — discarding bundle`);
-      cleanupJobTemp(jobId);
+    if (completed.matchedCount === 0) {
+      console.log(`Job ${jobId} no longer bundling (cancelled?) — deleting uploaded bundle`);
+      await deleteFromStorage(key).catch(() => {});
       return true;
     }
 
     const elapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(
-      `Job ${jobId} bundled: ${entries.length} files ` +
-      `(${cacheHits} from slpz cache, ${entries.length - cacheHits} fresh), ` +
+      `Job ${jobId} streamed to storage: ${files} files ` +
+      `(${cacheHits} from slpz cache, ${files - cacheHits} fresh), ` +
       `${(size / 1024 / 1024).toFixed(1)}MB in ${elapsed}s`
     );
   } catch (err) {
     const rawMsg = (err as Error).message;
+    if (err instanceof BundleStopped) {
+      if (!(await isCancelled(jobId))) {
+        await Job.updateOne(
+          { _id: jobId, status: "bundling" },
+          { status: "failed", error: `Job timed out after ${Math.round(jobTimeoutMs / 60000)} minutes (during upload)`, progress: null }
+        ).catch(() => {});
+      } else {
+        console.log(`Job ${jobId} cancelled during bundling — upload aborted`);
+      }
+      return true;
+    }
+    // A storage cap or a network blip isn't the job's fault: put it back in line
+    // (and pause for a cap) instead of failing it. It restarts from scratch.
+    const cap = classifyStorageError(err) === "cap";
+    const transient = TRANSIENT.test(rawMsg) && (job.uploadAttempts ?? 0) + 1 < config.jobUploadMaxAttempts;
+    if (cap || transient) {
+      const requeued = await Job.updateOne(
+        { _id: jobId, status: { $in: ["processing", "bundling"] } },
+        { status: "pending", progress: null, startedAt: null, deadlineAt: null, ...(cap ? {} : { $inc: { uploadAttempts: 1 } }) }
+      ).catch(() => null);
+      if (requeued?.matchedCount) {
+        if (cap) await pauseForStorageCap(`Upload of job ${jobId} refused: ${rawMsg}`);
+        console.error(`Job ${jobId} ${cap ? "hit the storage cap" : "upload failed (will retry)"}:`, rawMsg);
+        return true;
+      }
+    }
     const safeMsg = sanitizeJobErrorMessage(rawMsg);
     // Mark failed only if still in this worker's active states — never clobber a
-    // cancel/bundled that already landed (M1).
+    // cancel that already landed (M1).
     await Job.updateOne(
       { _id: jobId, status: { $in: ["processing", "bundling"] } },
       { status: "failed", error: safeMsg, progress: null }
@@ -173,9 +209,7 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
       console.error(`Failed to save error state for job ${jobId}:`, (saveErr as Error).message)
     );
 
-    cleanupJobTemp(jobId);
-
-    console.error(`Job ${jobId} compression failed:`, rawMsg);
+    console.error(`Job ${jobId} bundle failed:`, rawMsg);
   } finally {
     currentJobIds[lane] = null;
   }

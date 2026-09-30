@@ -71,7 +71,8 @@ async function checkHealth(): Promise<void> {
     const cutoff = new Date(Date.now() - STUCK_JOB_MINUTES * 60 * 1000);
     const stuckJob = await Job.findOne({
       status: { $in: ["processing", "bundling", "uploading"] },
-      startedAt: { $lt: cutoff },
+      // Past its own deadline (big bundles get longer), or the fixed limit for older jobs.
+      $or: [{ deadlineAt: { $ne: null, $lt: new Date() } }, { deadlineAt: null, startedAt: { $lt: cutoff } }],
     }).select("_id status startedAt").lean();
 
     const stuckId = stuckJob?._id?.toString() || null;

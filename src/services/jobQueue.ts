@@ -88,7 +88,9 @@ function remainingBytes(j: IJobLike): number {
   const p = j.progress;
   if (!p) return j.status === "bundled" ? total * 0.5 : total;
   if (p.step === "uploading" && p.bytesTotal) return Math.max(0, (p.bytesTotal - (p.bytesUploaded ?? 0)) * 0.5);
-  if (p.filesTotal) return total * (1 - 0.5 * (p.filesProcessed / p.filesTotal)); // bundling ~ first half
+  // Streaming bundles build and upload in one pass: progress is linear in files.
+  if (p.step === "bundling" && p.bytesUploaded != null && p.filesTotal) return total * (1 - p.filesProcessed / p.filesTotal);
+  if (p.filesTotal) return total * (1 - 0.5 * (p.filesProcessed / p.filesTotal)); // two-phase bundling ~ first half
   return total;
 }
 

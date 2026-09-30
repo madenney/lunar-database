@@ -5,6 +5,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { config } from "../config";
 import { BUNDLE_MANIFEST_NAME, BUNDLE_MANIFEST_VERSION, BundleManifest } from "./bundleManifest";
+import { ZipStreamWriter } from "./zipStream";
+import { uploadStream } from "./storage";
 
 const execFileAsync = promisify(execFile);
 
@@ -177,6 +179,104 @@ export async function createBundle(
 /**
  * Clean up temp directory and tar file for a job.
  */
+export interface StreamBundleHooks {
+  /** Files added so far, and bundle bytes uploaded so far. */
+  onProgress?: (filesAdded: number, filesTotal: number, bytesUploaded: number) => void;
+  /** Checked every few hundred files; true stops the build and aborts the upload. */
+  shouldStop?: () => Promise<boolean>;
+}
+
+export class BundleStopped extends Error {}
+
+/**
+ * Build a bundle and upload it at the same time: each .slpz goes from the
+ * cache (or a fresh compression) straight into a streaming zip that is
+ * uploaded to `key` as it grows. Nothing but the occasional freshly-compressed
+ * file touches local disk, so bundle size is limited only by storage (R2: 5 TB).
+ * Same archive as createBundle: stored .slpz entries plus lunar-manifest.json.
+ */
+export async function streamBundle(
+  entries: BundleEntry[],
+  jobId: string,
+  key: string,
+  expectedBytes: number,
+  hooks: StreamBundleHooks = {}
+): Promise<{ size: number; cacheHits: number; files: number }> {
+  const zip = new ZipStreamWriter();
+  let uploaded = 0;
+  let added = 0;
+  const upload = uploadStream(zip.stream, key, expectedBytes, (loaded) => {
+    uploaded = loaded;
+    hooks.onProgress?.(added, entries.length, uploaded);
+  });
+  // If the upload fails, stop feeding the zip (a write would wait forever on backpressure).
+  let uploadError: unknown = null;
+  const uploading = upload.done().catch((err) => {
+    uploadError = err;
+    zip.stream.destroy();
+  });
+  const freshDir = path.resolve(path.join(config.jobTempDir, `${jobId}-fresh`));
+  const slpzRoot = config.slpzArchiveDir;
+  const manifest: BundleManifest = { version: BUNDLE_MANIFEST_VERSION, replays: [] };
+  let cacheHits = 0;
+  try {
+    for (const [i, entry] of entries.entries()) {
+      if (uploadError) throw uploadError;
+      const fp = typeof entry === "string" ? entry : entry.filePath;
+      const name = `${i}_${path.basename(fp, ".slp")}.slpz`;
+      const relFromRoot = path.relative(path.resolve(config.slpRootDir), fp);
+      const cached =
+        slpzRoot && relFromRoot && !relFromRoot.startsWith("..") ? path.join(slpzRoot, relFromRoot.replace(/\.slp$/i, ".slpz")) : null;
+      try {
+        if (cached && fs.existsSync(cached)) {
+          await zip.addFile(name, cached);
+          cacheHits++;
+        } else {
+          // Cache miss: compress to a small temp file, add it, and keep it in the cache.
+          await fsp.mkdir(freshDir, { recursive: true });
+          const out = path.join(freshDir, name);
+          await execFileAsync(config.slpzBinary, ["-x", "-o", out, fp], { timeout: config.slpzTimeoutMinutes * 60 * 1000, killSignal: "SIGKILL" });
+          await zip.addFile(name, out);
+          if (cached) {
+            await fsp.mkdir(path.dirname(cached), { recursive: true }).catch(() => {});
+            await fsp.copyFile(out, cached).catch(() => {});
+          }
+          await fsp.unlink(out).catch(() => {});
+        }
+      } catch (err) {
+        if (uploadError) throw uploadError;
+        const code = (err as NodeJS.ErrnoException).code;
+        const msg = (err as Error).message;
+        if (code === "ENOENT" && msg.includes("spawn " + config.slpzBinary)) {
+          throw new Error("Compression tool not available — contact administrator");
+        }
+        if (msg.includes("changed while being added")) throw err; // the archive would be corrupt
+        // Source missing (deleted since the query) or unreadable: skip it, like createBundle.
+        if (code !== "ENOENT" && !msg.includes("No such file")) console.error(`Failed to bundle ${fp}:`, msg);
+        continue;
+      }
+      added++;
+      if (typeof entry !== "string") manifest.replays.push({ file: name, replayId: entry.replayId, fileHash: entry.fileHash });
+      if (added % 100 === 0) hooks.onProgress?.(added, entries.length, uploaded);
+      if (added % 500 === 0 && hooks.shouldStop && (await hooks.shouldStop())) throw new BundleStopped("stopped");
+      if (added % 50 === 0) await yieldToEventLoop();
+    }
+    if (added === 0) throw new Error("No files were compressed for bundling");
+    if (manifest.replays.length) await zip.addBuffer(BUNDLE_MANIFEST_NAME, Buffer.from(JSON.stringify(manifest)));
+    await zip.finish();
+    await uploading;
+    if (uploadError) throw uploadError;
+    hooks.onProgress?.(added, entries.length, zip.bytesWritten);
+    return { size: zip.bytesWritten, cacheHits, files: added };
+  } catch (err) {
+    zip.stream.destroy();
+    await upload.abort().catch(() => {});
+    throw err;
+  } finally {
+    await fsp.rm(freshDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export function cleanupJobTemp(jobId: string): void {
   if (!/^[a-f0-9]{24}$/.test(jobId)) {
     console.error(`cleanupJobTemp: invalid jobId "${jobId}"`);

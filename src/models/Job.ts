@@ -49,6 +49,8 @@ export interface IJob extends Document {
   lane: "fast" | "main";
   /** Upload attempts so far; transient failures retry up to config.jobUploadMaxAttempts. */
   uploadAttempts: number;
+  /** When the running job must be done by, scaled to its size (compressWorker); the reaper uses it. */
+  deadlineAt: Date | null;
   priority: number;
   replayIds: mongoose.Types.ObjectId[];
   replayCount: number;
@@ -128,6 +130,7 @@ const JobSchema = new Schema<IJob>(
     filterKey: { type: String, default: null },
     lane: { type: String, enum: ["fast", "main"], default: "main" },
     uploadAttempts: { type: Number, default: 0 },
+    deadlineAt: { type: Date, default: null },
     priority: { type: Number, default: 0 },
     replayIds: {
       type: [{ type: Schema.Types.ObjectId, ref: "Replay" }],

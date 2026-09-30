@@ -56,6 +56,34 @@ function getClient(): S3Client {
   return client;
 }
 
+/** Parts per multipart upload stay under this (R2/S3 allow at most 10,000). */
+const MAX_PARTS = 9000;
+
+/**
+ * Upload a stream of unknown length (a bundle being built) as a multipart
+ * upload. The part size comes from the expected size, with headroom, so even a
+ * multi-terabyte bundle stays under the part limit; R2 takes objects up to 5 TB.
+ * Returns the upload so the caller can abort it (cancel, errors).
+ */
+export function uploadStream(
+  body: NodeJS.ReadableStream,
+  key: string,
+  expectedBytes: number,
+  onProgress?: (loaded: number) => void
+): { done: () => Promise<void>; abort: () => Promise<void> } {
+  const partSize = Math.min(5 * 1024 ** 3, Math.max(16 * 1024 * 1024, Math.ceil((expectedBytes * 1.5) / MAX_PARTS)));
+  const upload = new Upload({
+    client: getClient(),
+    // Bigger parts buffer in memory, so fewer in flight.
+    queueSize: partSize > 128 * 1024 * 1024 ? 2 : 4,
+    partSize,
+    leavePartsOnError: false,
+    params: { Bucket: config.s3BucketName, Key: key, Body: body as any, ContentType: "application/zip" },
+  });
+  if (onProgress) upload.on("httpUploadProgress", (p) => onProgress(p.loaded ?? 0));
+  return { done: async () => void (await upload.done()), abort: () => upload.abort() };
+}
+
 export async function uploadToStorage(
   filePath: string,
   key: string,

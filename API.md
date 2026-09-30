@@ -379,8 +379,8 @@ creating another: it appears in their job list, they can poll it, and cancelling
 only unfollows it (a creator who cancels hands the job to a follower).
 
 **Response** `400` — `invalid_client`, `filter_required`, `no_matches`, or
-`too_large` (with `estimatedBytes`, `maxBytes`): the bundle would exceed
-`JOB_MAX_BUNDLE_MB` (20 GB).
+`too_large` (with `estimatedBytes`, `maxBytes`): only when `JOB_MAX_BUNDLE_MB`
+is set (off by default; bundles of any size stream straight to storage).
 
 **Response** `429` — `too_many_active_jobs` (with `limit`) — Per-client concurrent job limit reached. Applies to jobs in `pending`, `processing`, `bundling`, `bundled`, or `uploading` status.
 
@@ -987,7 +987,8 @@ Job creation is subject to several safety limits to prevent runaway resource con
 |---|---|---|---|
 | Concurrent jobs per client | 3 | `JOB_MAX_CONCURRENT_PER_CLIENT` | Active (non-terminal) jobs per `X-Client-Id`. |
 | Total pending queue | 200 | `JOB_MAX_PENDING_TOTAL` | Max pending jobs across all clients. |
-| Largest bundle | 20 GB | `JOB_MAX_BUNDLE_MB` | Bigger selections are refused with `too_large`. |
+| Largest bundle | no limit | `JOB_MAX_BUNDLE_MB` | Bundles stream straight to storage (R2 takes up to 5 TB), so any size works; set this to refuse bigger ones with `too_large`. |
+| Job time limit | 8 h, or more for big bundles | `JOB_TIMEOUT_MINUTES` | Each job gets max(this, its bundle size at 1 MiB/s); the reaper and stuck alert use that deadline. |
 | Fast lane | 1 GB | `JOB_FAST_LANE_MAX_MB` | Bundles up to this size can also use the second worker pair. |
 | Reuse window | 48 h | `JOB_REUSE_HOURS` | An identical request within this window shares the existing job or bundle. |
 | Upload attempts | 3 | `JOB_UPLOAD_MAX_ATTEMPTS` | Network/TLS upload failures retry before the job fails; a storage cap pauses uploads instead. |
