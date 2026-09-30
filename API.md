@@ -369,6 +369,11 @@ The server stores `replayCount`, `totalMatched` (uncapped match count, when a li
 }
 ```
 
+**Explicit lists:** `replayIds` (array of up to 10,000 24-hex replay ids) bundles
+exactly those replays; it combines with any other field. Unknown, unusable or
+hidden-duplicate ids are left out and counted in the response's `missing`. An
+identical list (any order) reuses the same job. The estimate accepts it too.
+
 `lane` is `fast` for bundles up to `JOB_FAST_LANE_MAX_MB` (1 GB): a second worker
 pair serves only those, so a huge job never blocks small ones.
 

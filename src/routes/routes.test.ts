@@ -628,19 +628,63 @@ describe("POST /api/clips", () => {
       clip({ rank: 200, attacker: { port: 0, characterId: 20, connectCode: "CCC#3", displayName: "Cc" } }), // Falco: excluded
       clip({ type: "edgeguard", rank: 50 }), // other type: excluded
     ]);
-    const { status, body } = await post("/api/clips", { type: "combo", attackerCharacterId: "2", victimCharacterId: "9", killOnly: true, sort: "best" });
+    const { status, body } = await post("/api/clips", { type: "combo", attackerCharacterId: "2", victimCharacterId: "9", killOnly: true, sort: "best", withMoves: true });
     expect(status).toBe(200);
     expect(body).toMatchObject({ total: 2, capped: false, page: 1 });
     expect(body.results.map((c: any) => c.rank)).toEqual([120, 80]);
     expect(body.results[0]).toMatchObject({ type: "combo", startFrame: 100, endFrame: 200, attacker: { connectCode: "AAA#1" }, moveList: [[1, 100, 10, 1]] });
     expect(body.results[0].id).toBeDefined();
     expect(body.results[0]).not.toHaveProperty("detail");
+    const lean = await post("/api/clips", { type: "combo", attackerCharacterId: "2" });
+    expect(lean.body.results[0]).not.toHaveProperty("moveList");
   });
 
   it("rejects a search without a valid type", async () => {
     const { status, body } = await post("/api/clips", { attackerCharacterId: "2" });
     expect(status).toBe(400);
     expect(body.code).toBe("invalid_request");
+  });
+});
+
+describe("explicit replay-list exports (replayIds)", () => {
+  const A = { "X-Client-Id": "c1c1c1c1-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const B = { "X-Client-Id": "d2d2d2d2-b1b1-c2c2-d3d3-e4e4e4e4e4e4" };
+  const seed = async () => {
+    const mk = (i: number, extra: Record<string, unknown> = {}) =>
+      Replay.create({ filePath: `/test/list${i}.slp`, fileHash: `l${i}`, fileSize: 1000 * (i + 1), stageId: 31, players: [{ playerIndex: 0, characterId: 2 }], ...extra });
+    const a = await mk(0);
+    const b = await mk(1);
+    const hidden = await mk(2, { duplicateOf: a._id }); // a hidden duplicate is never bundled
+    return { a, b, hidden };
+  };
+
+  it("estimates exactly the listed replays and says how many are missing", async () => {
+    const { a, b, hidden } = await seed();
+    const unknown = new mongoose.Types.ObjectId();
+    const est = await post("/api/replays/estimate", { replayIds: [String(a._id), String(b._id), String(hidden._id), String(unknown), "not-an-id"] }, A);
+    expect(est.status).toBe(200);
+    expect(est.body).toMatchObject({ replayCount: 2, rawSize: 3000, missing: 2 });
+  });
+
+  it("creates a job for the list, and an identical list in another order reuses it", async () => {
+    const { a, b } = await seed();
+    const first = await post("/api/jobs", { replayIds: [String(a._id), String(b._id)] }, A);
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ reused: false, missing: 0 });
+    const job = await Job.findById(first.body.jobId).lean();
+    expect(job!.filter.replayIds).toHaveLength(2);
+    const again = await post("/api/jobs", { replayIds: [String(b._id).toUpperCase(), String(a._id)] }, B);
+    expect(again.body).toMatchObject({ jobId: first.body.jobId, reused: true });
+    const other = await post("/api/jobs", { replayIds: [String(a._id)] }, B);
+    expect(other.status).toBe(201);
+    expect(other.body.jobId).not.toBe(first.body.jobId);
+  });
+
+  it("shows a list's size, not its ids, in the public queue", async () => {
+    const ids = Array.from({ length: 3 }, () => String(new mongoose.Types.ObjectId()));
+    await Job.create({ filter: { replayIds: ids }, createdBy: "x", estimatedSize: 800 });
+    const { body } = await get("/api/jobs/queue");
+    expect(body.waiting[0].filter).toEqual({ replayIdCount: 3 });
   });
 });
 

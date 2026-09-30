@@ -9,6 +9,7 @@
  *  - at most `maxHeavy` such queries run at once, so a burst queues instead of
  *    thrashing MongoDB (load test: >20 concurrent heavy queries = timeouts).
  */
+import crypto from "crypto";
 import { config } from "../config";
 
 type Entry<T> = { at: number; value: T };
@@ -85,7 +86,9 @@ export function paramsKey(prefix: string, params: Record<string, unknown>): stri
     .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== "")
     .sort()
     .map((k) => [k, params[k]]);
-  return `${prefix}:${JSON.stringify(clean)}`;
+  const json = JSON.stringify(clean);
+  // Explicit id lists can be long: hash big keys so the cache stays small.
+  return `${prefix}:${json.length > 512 ? crypto.createHash("sha1").update(json).digest("hex") : json}`;
 }
 
 /** Match counts and size estimates (shared by search, estimate and job creation). */

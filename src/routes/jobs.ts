@@ -163,7 +163,10 @@ router.post("/", jobCreateLimiter, async (req: Request, res: Response) => {
       estimatedProcessingTime: estimates.estimatedProcessingTimeSec,
     });
 
-    res.status(201).json({ jobId: job._id, status: job.status, reused: false, lane: job.lane });
+    // An explicit list: say how many of the named replays aren't in the bundle
+    // (unknown, hidden duplicates or unusable) rather than failing the job.
+    const missing = filter.replayIds ? Math.max(0, filter.replayIds.length - count) : undefined;
+    res.status(201).json({ jobId: job._id, status: job.status, reused: false, lane: job.lane, ...(missing != null ? { missing } : {}) });
   } catch (err) {
     sendError(res, err);
   }
@@ -198,6 +201,7 @@ router.get("/", jobListLimiter, async (req: Request, res: Response) => {
 
     const mapped = jobs.map((j) => ({
       ...j,
+      filter: publicFilter(j.filter),
       downloadReady: j.status === "completed" && !!j.r2Key,
     }));
 
@@ -245,6 +249,13 @@ router.get("/bundles", bundlesLimiter, async (req: Request, res: Response) => {
     sendError(res, err);
   }
 });
+
+/** A job filter for public responses: an explicit id list becomes its count. */
+export function publicFilter(f: Record<string, any> | null | undefined) {
+  if (!f || !Array.isArray(f.replayIds)) return f;
+  const { replayIds, ...rest } = f;
+  return { ...rest, replayIdCount: replayIds.length };
+}
 
 const queueLimiter = createRateLimiter({
   windowMs: 60 * 1000,
@@ -297,19 +308,19 @@ router.get("/queue", queueLimiter, async (req: Request, res: Response) => {
       throughputBps: Math.round(snap.bps),
       workSec,
       running: snap.running.map((j) => ({
-        id: j._id, filter: j.filter, replayCount: j.replayCount, bytes: bundleBytes(j), status: j.status, lane: j.lane,
+        id: j._id, filter: publicFilter(j.filter), replayCount: j.replayCount, bytes: bundleBytes(j), status: j.status, lane: j.lane,
         progressPct: pct(j), readySec: snap.forecast.get(String(j._id))?.readySec ?? null, shared: shared(j), mine: mine(j),
       })),
       waiting: snap.pending.slice(0, 300).map((j, i) => {
         const f = snap.forecast.get(String(j._id));
         return {
-          id: j._id, filter: j.filter, replayCount: j.replayCount, bytes: bundleBytes(j), lane: j.lane, position: i + 1,
+          id: j._id, filter: publicFilter(j.filter), replayCount: j.replayCount, bytes: bundleBytes(j), lane: j.lane, position: i + 1,
           startSec: f?.startSec ?? null, readySec: f?.readySec ?? null, shared: shared(j), mine: mine(j),
         };
       }),
       waitingTotal: snap.pending.length,
       recent: recent.map((j) => ({
-        id: j._id, filter: j.filter, replayCount: j.replayCount, bundleSize: j.bundleSize, completedAt: j.completedAt,
+        id: j._id, filter: publicFilter(j.filter), replayCount: j.replayCount, bundleSize: j.bundleSize, completedAt: j.completedAt,
         downloadCount: j.downloadCount, pinned: !!j.pinned, mine: mine(j),
         expiresAt: j.pinned ? null : new Date(((j.lastDownloadedAt ?? j.completedAt) as Date).getTime() + cleanupMs),
       })),

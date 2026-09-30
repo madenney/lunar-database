@@ -2,6 +2,7 @@
  * Builds a MongoDB query from replay search parameters.
  * Shared by GET /api/replays, POST /api/replays/estimate, POST /api/jobs and the bundle worker.
  */
+import { Types } from "mongoose";
 import { Replay, REPLAY_SOURCES } from "../models/Replay";
 
 export interface ReplaySearchParams {
@@ -26,6 +27,8 @@ export interface ReplaySearchParams {
   source?: string;
   /** Comma-joined tournament keys (e.g. "kotj-7,midlane-melee-177"); games of any of them. */
   tournament?: string;
+  /** Exactly these replays (24-hex ids, e.g. the games behind chosen clips). Combines with any other field. */
+  replayIds?: string[];
   maxFiles?: number;
   maxSizeMb?: number;
   /** "field:dir" e.g. "startAt:-1". Used so a limited selection (maxFiles) picks
@@ -137,6 +140,21 @@ function rankTierNames(param: string | undefined): string[] {
 }
 
 const TOURNAMENT_KEY_RE = /^[a-z0-9-]{1,80}$/;
+const REPLAY_ID_RE = /^[0-9a-f]{24}$/;
+/** Most replays one explicit-list export may name (Phase 2 of docs/clip-search.md). */
+export const MAX_REPLAY_IDS = 10_000;
+
+/** Valid, de-duplicated replay ids (lowercase hex) from an array or comma list, capped. */
+export function replayIdList(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+  const out = new Set<string>();
+  for (const x of raw) {
+    const id = typeof x === "string" ? x.trim().toLowerCase() : "";
+    if (REPLAY_ID_RE.test(id)) out.add(id);
+    if (out.size >= MAX_REPLAY_IDS) break;
+  }
+  return [...out];
+}
 
 /** Valid, de-duplicated tournament keys from a comma-joined param. */
 export function tournamentKeys(param: string | undefined): string[] {
@@ -226,6 +244,9 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
   } else if (sources.length > 1) {
     query.source = { $in: sources };
   }
+
+  const ids = replayIdList(params.replayIds);
+  if (ids.length) query._id = { $in: ids.map((id) => new Types.ObjectId(id)) };
 
   const tournaments = tournamentKeys(params.tournament);
   if (tournaments.length === 1) {

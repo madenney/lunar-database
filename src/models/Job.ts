@@ -19,6 +19,8 @@ export interface IJobFilter {
   source?: string;
   /** Comma-joined tournament keys, e.g. "kotj-7". */
   tournament?: string;
+  /** Exactly these replays (an explicit-list export, e.g. from Clipper's chosen clips). */
+  replayIds?: string[];
   /** Comma-joined rank tiers per side (ranked dataset only), e.g. "master". */
   p1Rank?: string;
   p2Rank?: string;
@@ -97,6 +99,7 @@ const JobFilterSchema = new Schema<IJobFilter>(
     endDate: { type: String },
     source: { type: String },
     tournament: { type: String },
+    replayIds: { type: [String], default: undefined },
     p1Rank: { type: String },
     p2Rank: { type: String },
     maxFiles: { type: Number },

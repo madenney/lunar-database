@@ -115,6 +115,7 @@ router.post("/estimate", estimateLimiter, async (req: Request, res: Response) =>
 
     res.json({
       replayCount: count,
+      ...(params.replayIds ? { missing: Math.max(0, params.replayIds.length - count) } : {}),
       /** Counting stopped at the cap: count and sizes are "at least". */
       capped: !!capped,
       rawSize,

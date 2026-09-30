@@ -1,4 +1,4 @@
-import { buildReplaySearchQuery } from "./replaySearchQuery";
+import { buildReplaySearchQuery, replayIdList, MAX_REPLAY_IDS } from "./replaySearchQuery";
 import { parseFilter, hasFilterOrLimit, MAX_SIZE_MB } from "./replayFilter";
 
 // Pure query-building tests: no MongoDB connection is needed.
@@ -96,5 +96,18 @@ describe("parseFilter", () => {
   it("does not count sort or limits as filters", () => {
     expect(hasFilterOrLimit(parseFilter({ sort: "startAt:1" }))).toEqual({ hasFilter: false, hasLimit: false });
     expect(hasFilterOrLimit(parseFilter({ stageId: "31" }))).toEqual({ hasFilter: true, hasLimit: false });
+  });
+});
+
+describe("replayIdList", () => {
+  it("keeps valid ids once, lowercased, from an array or a comma list", () => {
+    const id = "6abbe33244a1db24ff7a5525";
+    expect(replayIdList([id, id.toUpperCase(), "nope", 5, `${id}x`])).toEqual([id]);
+    expect(replayIdList(`${id}, ${"a".repeat(24)}`)).toEqual([id, "a".repeat(24)]);
+    expect(replayIdList(undefined)).toEqual([]);
+  });
+  it("caps the list", () => {
+    const many = Array.from({ length: MAX_REPLAY_IDS + 5 }, (_, i) => i.toString(16).padStart(24, "0"));
+    expect(replayIdList(many)).toHaveLength(MAX_REPLAY_IDS);
   });
 });

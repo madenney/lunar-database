@@ -7,7 +7,7 @@
  *     attackerCharacterId, victimCharacterId,               comma lists or arrays (max 20)
  *     attackerConnectCode, victimConnectCode,
  *     stageId, source, startDate, endDate,
- *     minDamage, minMoves, killOnly, zeroToDeath, includeInfinites,
+ *     minDamage, minMoves, killOnly, zeroToDeath, includeInfinites, withMoves,
  *     sort: "newest" (default) | "best" | "oldest", page, limit (max 100) }
  * -> { results, total, capped, page, limit }
  *
@@ -110,7 +110,7 @@ export function parseClipSearch(body: Record<string, unknown>): ClipSearch | { e
 const RESULT_FIELDS = {
   replayId: 1, type: 1, startFrame: 1, endFrame: 1, gameFrames: 1, stageId: 1, source: 1, startAt: 1,
   attacker: 1, victim: 1, startPercent: 1, endPercent: 1, damage: 1, moves: 1, didKill: 1,
-  moveList: 1, score: 1, rank: 1, metrics: 1, infinite: 1,
+  score: 1, rank: 1, metrics: 1, infinite: 1,
 };
 
 router.post("/", clipsLimiter, async (req: Request, res: Response) => {
@@ -121,14 +121,18 @@ router.post("/", clipsLimiter, async (req: Request, res: Response) => {
       return;
     }
     const { filter, sort, page, limit } = parsed;
+    // Move lists are only needed to build Clipper clips; leaving them out keeps
+    // results small (an infinite's list runs to hundreds of moves).
+    const withMoves = req.body?.withMoves === true || req.body?.withMoves === "true";
+    const projection = withMoves ? { ...RESULT_FIELDS, moveList: 1 } : RESULT_FIELDS;
     const clips = mongoose.connection.collection("clips");
-    const key = { filter: JSON.stringify(filter), sort: JSON.stringify(sort) };
+    const key = { filter: JSON.stringify(filter), sort: JSON.stringify(sort), withMoves };
     const [results, total] = await Promise.all([
       heavyQueries.get(paramsKey("clips", { ...key, page, limit }), () =>
-        clips.find(filter, { projection: RESULT_FIELDS, sort, skip: (page - 1) * limit, limit, maxTimeMS: 8000 }).toArray()
+        clips.find(filter, { projection, sort, skip: (page - 1) * limit, limit, maxTimeMS: 8000 }).toArray()
       ),
       heavyQueries
-        .get(paramsKey("clipcount", key), () => clips.countDocuments(filter, { limit: CLIP_COUNT_CAP, maxTimeMS: 8000 }))
+        .get(paramsKey("clipcount", { filter: key.filter }), () => clips.countDocuments(filter, { limit: CLIP_COUNT_CAP, maxTimeMS: 8000 }))
         .catch(() => null), // a slow count shouldn't lose the results
     ]);
     res.json({

@@ -13,6 +13,7 @@
  */
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import mongoose from "mongoose";
 import { Job, type IJob } from "../models/Job";
 import { ACTIVE_JOB_STATUSES } from "../models/jobStatus";
@@ -32,6 +33,13 @@ const KEY_FIELDS = [
   "stageId", "startDate", "endDate", "source", "tournament", "maxFiles", "maxSizeMb", "sort",
 ] as const;
 
+/** An id list's part of the key: count + hash of the sorted ids (a key stays short at 10,000 ids). */
+function idsKey(ids: unknown): string | null {
+  if (!Array.isArray(ids) || !ids.length) return null;
+  const sorted = [...ids].map(String).sort();
+  return `${sorted.length}:${crypto.createHash("sha1").update(sorted.join(",")).digest("hex")}`;
+}
+
 /**
  * Canonical key of a job filter: same key = same bundle. List values are
  * order-insensitive; sort only matters when a limit picks the first N.
@@ -48,6 +56,8 @@ export function filterKey(filter: Record<string, unknown>): string {
     }
     parts.push(`${k}=${v}`);
   }
+  const ids = idsKey(filter.replayIds);
+  if (ids) parts.push(`replayIds=${ids}`);
   return parts.join("&");
 }
 
