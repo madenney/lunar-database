@@ -509,6 +509,21 @@ describe("tournaments and sets", () => {
     expect(est.status).toBe(200);
     expect(est.body.replayCount).toBe(1);
   });
+  it("names a replay's listed tournament in search and single-replay responses", async () => {
+    await seed();
+    const players = [{ playerIndex: 0, characterId: 2 }, { playerIndex: 1, characterId: 9 }];
+    const listed = await Replay.create({ filePath: "/t/a.slp", fileHash: "a", stageId: 31, duration: 7200, players, tournamentKey: "kotj-7", source: "tournament" });
+    await Replay.create({ filePath: "/t/b.slp", fileHash: "b", stageId: 31, duration: 7200, players, tournamentKey: "friendlies", source: "netplay" });
+    await Replay.create({ filePath: "/t/c.slp", fileHash: "c", stageId: 31, duration: 7200, players, source: "ranked" });
+    const { body } = await get("/api/replays?limit=10");
+    const byHash = Object.fromEntries(body.replays.map((r: any) => [r.fileHash, r]));
+    expect(byHash.a).toMatchObject({ source: "tournament", tournamentKey: "kotj-7", tournamentName: "KOTJ #7" });
+    // Unlisted tournaments have no page, so no name (and no link).
+    expect(byHash.b.tournamentName).toBeNull();
+    expect(byHash.c).toMatchObject({ source: "ranked", tournamentName: null });
+    const one = await get(`/api/replays/${listed._id}`);
+    expect(one.body.tournamentName).toBe("KOTJ #7");
+  });
 });
 
 describe("GET /api/replays/:id", () => {

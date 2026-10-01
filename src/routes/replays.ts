@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { Replay } from "../models/Replay";
 import { GameStats } from "../models/GameStats";
+import { Tournament } from "../models/Tournament";
 import { loadGameEvents } from "../services/gameDetail";
 import { resolveSelection, ReplaySearchParams } from "../services/replaySearchQuery";
 import { filterKey, findReusableJob, forecastNewJob, getQueueState, pauseMessage } from "../services/jobQueue";
@@ -43,6 +44,18 @@ const ROW_PLAYER_FIELDS = [
  * Compact extracted stats for a page of results, keyed by replay ID: the result
  * and a few headline numbers per player. Replays not yet extracted are absent.
  */
+/**
+ * Names of the listed tournaments these replays belong to, keyed by
+ * tournamentKey, so a row can say where a game came from and link its page.
+ * Unlisted tournaments (no public page) are left out.
+ */
+export async function tournamentNames(replays: { tournamentKey?: string | null }[]): Promise<Map<string, string>> {
+  const keys = [...new Set(replays.map((r) => r.tournamentKey).filter((k): k is string => typeof k === "string"))];
+  if (!keys.length) return new Map();
+  const rows = await Tournament.find({ _id: { $in: keys }, listed: { $ne: false } }).select({ name: 1 }).lean();
+  return new Map(rows.map((t) => [String(t._id), t.name]));
+}
+
 async function rowStats(ids: unknown[]): Promise<Map<string, Record<string, unknown>>> {
   // (`error` is also a Document method name, so the filter is typed loosely.)
   const filter: Record<string, unknown> = { replayId: { $in: ids }, "extractors.core": { $exists: true }, error: null };
@@ -187,7 +200,12 @@ router.get("/", searchLimiter, async (req: Request, res: Response) => {
 
     // Extracted stats are an enhancement: a slow or failed lookup never fails the search.
     const stats = await rowStats(replays.map((r) => r._id)).catch(() => new Map<string, Record<string, unknown>>());
-    const withStats = replays.map((r) => ({ ...r, stats: stats.get(String(r._id)) ?? null }));
+    const names = await tournamentNames(replays).catch(() => new Map<string, string>());
+    const withStats = replays.map((r) => ({
+      ...r,
+      stats: stats.get(String(r._id)) ?? null,
+      tournamentName: (r.tournamentKey && names.get(r.tournamentKey)) || null,
+    }));
 
     const clientId = req.headers["x-client-id"] as string | undefined;
     SearchEvent.create({
@@ -229,7 +247,8 @@ router.get("/:id", replayGetLimiter, async (req: Request, res: Response) => {
       res.status(404).json({ error: "Replay not found" });
       return;
     }
-    res.json(replay);
+    const names = await tournamentNames([replay]).catch(() => new Map<string, string>());
+    res.json({ ...replay, tournamentName: (replay.tournamentKey && names.get(replay.tournamentKey)) || null });
   } catch (err) {
     sendError(res, err);
   }
