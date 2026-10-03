@@ -53,6 +53,13 @@ describe("canonicalClipSearch", () => {
     expect(canonicalClipSearch({ type: "combo", attackerConnectCode: { $ne: null } })).toBeNull();
     expect(canonicalClipSearch("combo")).toBeNull();
   });
+
+  it("keeps tournaments as a sorted list", () => {
+    expect(JSON.parse(canonicalClipSearch({ type: "combo", tournament: "kotj-7,big-house-11" })!)).toEqual({
+      type: "combo",
+      tournament: ["big-house-11", "kotj-7"],
+    });
+  });
   it("can never be turned into an ordinary replay query by mistake", () => {
     expect(() => buildReplaySearchQuery({ clipSearch: "{}" })).toThrow(/clip-search/);
   });

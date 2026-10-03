@@ -12,6 +12,9 @@ const MAX_LIMIT = 100;
 const MAX_PAGE = 400;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const CODE_RE = /^[A-Z0-9]{1,8}#\d{1,4}$/;
+const TOURNAMENT_RE = /^[a-z0-9-]{1,80}$/;
+/** Most games a tournament filter narrows to (the largest events have a few thousand). */
+export const MAX_TOURNAMENT_GAMES = 50_000;
 
 export interface ClipSearch {
   type: (typeof CLIP_TYPES)[number];
@@ -80,6 +83,25 @@ export function parseClipSearch(body: Record<string, unknown>): ClipSearch | { e
   return { type: type as ClipSearch["type"], filter, sort, page, limit };
 }
 
+/**
+ * Tournament keys (`tournament`, like the replay search's): clips don't store
+ * their tournament, so this narrows `filter` to the tournaments' games and
+ * returns the index hint to use (the replayId index; a type/date index would
+ * walk every clip). Null when the search names no tournament.
+ */
+export async function applyTournamentFilter(
+  filter: Record<string, unknown>,
+  body: Record<string, unknown>,
+): Promise<{ replayId: 1 } | null> {
+  const keys = [...new Set(list(body.tournament).filter((k) => TOURNAMENT_RE.test(k)))];
+  if (!keys.length) return null;
+  const games = await mongoose.connection
+    .collection("replays")
+    .find({ tournamentKey: oneOrIn(keys) }, { projection: { _id: 1 }, limit: MAX_TOURNAMENT_GAMES, maxTimeMS: 8000 })
+    .toArray();
+  filter.replayId = { $in: games.map((g) => g._id) };
+  return { replayId: 1 };
+}
 
 // ------------------------------------------------------------------ exports
 
@@ -87,9 +109,10 @@ export function parseClipSearch(body: Record<string, unknown>): ClipSearch | { e
 const SELECTING_FIELDS = [
   "type", "attackerCharacterId", "victimCharacterId", "attackerConnectCode", "victimConnectCode",
   "stageId", "source", "startDate", "endDate", "minDamage", "minMoves", "killOnly", "zeroToDeath", "includeInfinites",
+  "tournament",
 ] as const;
 
-const LIST_FIELDS = new Set(["attackerCharacterId", "victimCharacterId", "attackerConnectCode", "victimConnectCode", "stageId", "source"]);
+const LIST_FIELDS = new Set(["attackerCharacterId", "victimCharacterId", "attackerConnectCode", "victimConnectCode", "stageId", "source", "tournament"]);
 
 /**
  * A clip search as a canonical string (sorted keys, only the fields that select
@@ -128,9 +151,14 @@ export function canonicalClipSearch(body: unknown): string | null {
 export async function* clipSearchReplayIds(canonical: string, batchSize = 20_000): AsyncGenerator<string[]> {
   const parsed = parseClipSearch(JSON.parse(canonical));
   if ("error" in parsed) throw new Error(`Invalid clip search: ${parsed.error}`);
+  const hint = await applyTournamentFilter(parsed.filter, JSON.parse(canonical));
   const cursor = mongoose.connection
     .collection("clips")
-    .aggregate([{ $match: parsed.filter }, { $group: { _id: "$replayId" } }], { allowDiskUse: true, maxTimeMS: 300_000 })
+    .aggregate([{ $match: parsed.filter }, { $group: { _id: "$replayId" } }], {
+      allowDiskUse: true,
+      maxTimeMS: 300_000,
+      ...(hint ? { hint } : {}),
+    })
     .batchSize(batchSize);
   let batch: string[] = [];
   for await (const doc of cursor) {

@@ -22,7 +22,7 @@ import { createRateLimiter } from "../utils/rateLimiter";
 import { sendError } from "../utils/sendError";
 import { heavyQueries, paramsKey } from "../services/queryCache";
 import { sendApiError } from "../utils/apiErrors";
-import { parseClipSearch, CLIP_COUNT_CAP } from "../services/clipSearch";
+import { parseClipSearch, applyTournamentFilter, CLIP_COUNT_CAP } from "../services/clipSearch";
 
 export { parseClipSearch, CLIP_TYPES, CLIP_COUNT_CAP, type ClipSearch } from "../services/clipSearch";
 
@@ -48,6 +48,7 @@ router.post("/", clipsLimiter, async (req: Request, res: Response) => {
       return;
     }
     const { filter, sort, page, limit } = parsed;
+    const hint = await applyTournamentFilter(filter, req.body ?? {});
     // Move lists are only needed to build Clipper clips; leaving them out keeps
     // results small (an infinite's list runs to hundreds of moves).
     const withMoves = req.body?.withMoves === true || req.body?.withMoves === "true";
@@ -56,10 +57,10 @@ router.post("/", clipsLimiter, async (req: Request, res: Response) => {
     const key = { filter: JSON.stringify(filter), sort: JSON.stringify(sort), withMoves };
     const [results, total] = await Promise.all([
       heavyQueries.get(paramsKey("clips", { ...key, page, limit }), () =>
-        clips.find(filter, { projection, sort, skip: (page - 1) * limit, limit, maxTimeMS: 8000 }).toArray()
+        clips.find(filter, { projection, sort, skip: (page - 1) * limit, limit, maxTimeMS: 8000, ...(hint ? { hint } : {}) }).toArray()
       ),
       heavyQueries
-        .get(paramsKey("clipcount", { filter: key.filter }), () => clips.countDocuments(filter, { limit: CLIP_COUNT_CAP, maxTimeMS: 8000 }))
+        .get(paramsKey("clipcount", { filter: key.filter }), () => clips.countDocuments(filter, { limit: CLIP_COUNT_CAP, maxTimeMS: 8000, ...(hint ? { hint } : {}) }))
         .catch(() => null), // a slow count shouldn't lose the results
     ]);
     res.json({
