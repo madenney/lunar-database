@@ -161,6 +161,26 @@ export interface Forecast {
 }
 
 /**
+ * Index of the fast-lane job the fast worker takes next: the smallest (then the
+ * oldest), so a 10-game bundle isn't stuck behind 200 MB ones (download-rush test:
+ * small bundles waited up to 16 min first-come-first-served). The lane is capped
+ * at fastLaneMaxMb, so nothing in it waits long; the main worker still takes the
+ * oldest job of any size. compressWorker claims in the same order.
+ */
+function smallestFast(queue: IJobLike[]): number {
+  let best = -1;
+  for (let i = 0; i < queue.length; i++) {
+    const j = queue[i];
+    if ((j.lane ?? laneFor(bundleBytes(j))) !== "fast") continue;
+    if (best < 0) { best = i; continue; }
+    const b = queue[best];
+    const byPriority = (j.priority ?? 0) - (b.priority ?? 0);
+    if (byPriority < 0 || (byPriority === 0 && bundleBytes(j) < bundleBytes(b))) best = i;
+  }
+  return best;
+}
+
+/**
  * Forecast the queue. Two workers share one uplink (bytes/sec `bps`): the fast
  * worker takes only fast-lane jobs, the main worker takes whatever is next.
  * Running jobs keep their worker. Returns a forecast per job id.
@@ -179,7 +199,7 @@ export function simulateQueue(running: IJobLike[], pending: IJobLike[], bps: num
   let t = 0;
   let started = 0;
   const take = (lane: Lane) => {
-    const i = lane === "fast" ? queue.findIndex((j) => (j.lane ?? laneFor(bundleBytes(j))) === "fast") : 0;
+    const i = lane === "fast" ? smallestFast(queue) : 0;
     if (i < 0 || !queue.length) return;
     const [j] = queue.splice(i, 1);
     slots[lane] = { id: String(j._id), left: remainingBytes(j) };

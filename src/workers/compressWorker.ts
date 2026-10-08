@@ -38,7 +38,8 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
   const job = await Job.findOneAndUpdate(
     lane === "fast" ? { status: "pending", lane: "fast" } : { status: "pending" },
     { $set: { status: "processing", startedAt: new Date(), phaseStartedAt: new Date() } },
-    { sort: { priority: 1, createdAt: 1 }, new: true }
+    // The fast lane takes its smallest job first (see services/jobQueue.ts simulateQueue).
+    { sort: lane === "fast" ? { priority: 1, estimatedSize: 1, createdAt: 1 } : { priority: 1, createdAt: 1 }, new: true }
   );
 
   if (!job) return false;

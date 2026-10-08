@@ -41,4 +41,15 @@ describe("simulateQueue", () => {
     expect(f.get("small")!.readySec).toBe(20); // shares the uplink with the huge job
     expect(f.get("big")!.startSec).toBeGreaterThan(50000);
   });
+
+  it("serves the fast lane smallest first; the main worker still takes the oldest", () => {
+    const f = simulateQueue(
+      [job("huge", 60000, 0, { status: "uploading" })], // holds the main worker
+      [job("m1", 180, 1), job("m2", 150, 2), job("tiny", 5, 3), job("small", 20, 4)],
+      bps,
+    );
+    const order = ["tiny", "small", "m2", "m1"].map((id) => f.get(id)!.startSec);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(f.get("tiny")!.startSec).toBe(0);
+  });
 });
