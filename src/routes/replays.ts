@@ -17,7 +17,8 @@ import { DownloadEvent } from "../models/DownloadEvent";
 import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
-import { BytePacer, StreamGate } from "../services/replayStreams";
+import { StreamGate } from "../services/replayStreams";
+import { uplink } from "../services/uplink";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { sanitizeFilters } from "../utils/sanitizeFilters";
 
@@ -323,7 +324,6 @@ const downloadLimiter = createRateLimiter({
 });
 
 const replayStreams = new StreamGate(config.replayStreamsMax);
-const replayPacer = new BytePacer(config.replayBytesPerSec);
 
 // GET /api/replays/:id/download — serve the .slp file directly
 router.get("/:id/download", downloadLimiter, async (req: Request, res: Response) => {
@@ -365,7 +365,7 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       res.attachment(path.basename(resolved));
       res.setHeader("Content-Encoding", "gzip");
       res.setHeader("Vary", "Accept-Encoding");
-      pipeline(fs.createReadStream(resolved), zlib.createGzip({ level: 6 }), replayPacer.stream(), res).catch(() => {
+      pipeline(fs.createReadStream(resolved), zlib.createGzip({ level: 6 }), uplink.stream(), res).catch(() => {
         if (!res.headersSent) res.status(500).end();
         else res.destroy();
       });

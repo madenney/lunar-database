@@ -5,6 +5,7 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { Agent as HttpsAgent } from "https";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { config } from "../config";
+import { paced } from "./uplink";
 
 let client: S3Client | null = null;
 
@@ -78,7 +79,8 @@ export function uploadStream(
     queueSize: partSize > 128 * 1024 * 1024 ? 2 : 4,
     partSize,
     leavePartsOnError: false,
-    params: { Bucket: config.s3BucketName, Key: key, Body: body as any, ContentType: "application/zip" },
+    // Paced with replay downloads: one shared uplink budget (services/uplink.ts).
+    params: { Bucket: config.s3BucketName, Key: key, Body: paced(body) as any, ContentType: "application/zip" },
   });
   if (onProgress) upload.on("httpUploadProgress", (p) => onProgress(p.loaded ?? 0));
   return { done: async () => void (await upload.done()), abort: () => upload.abort() };
@@ -107,7 +109,8 @@ export async function uploadToStorage(
       params: {
         Bucket: config.s3BucketName,
         Key: key,
-        Body: body,
+        // Paced with replay downloads: one shared uplink budget (services/uplink.ts).
+        Body: paced(body) as any,
         ContentLength: stat.size,
         ContentType: "application/x-tar",
       },

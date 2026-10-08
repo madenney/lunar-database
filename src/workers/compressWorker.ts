@@ -47,10 +47,10 @@ export async function processNextCompression(lane: Lane = "main"): Promise<boole
   currentJobIds[lane] = jobId;
   const jobStartTime = Date.now();
   // Big bundles take as long as the upload does: allow at least the configured
-  // timeout, and more for large ones (at a pessimistic 1 MiB/s, a sixth of the
-  // measured home upload), so no legitimate job is cut off.
+  // timeout, and more for large ones (at a pessimistic 0.5 MiB/s: uploads share a
+  // paced uplink budget with replay views), so no legitimate job is cut off.
   const estBundleBytes = Math.round((job.estimatedSize ?? 0) / 8) + (job.replayCount ?? 0) * 128;
-  const jobTimeoutMs = Math.max(config.jobTimeoutMinutes * 60 * 1000, (estBundleBytes / (1024 * 1024)) * 1000);
+  const jobTimeoutMs = Math.max(config.jobTimeoutMinutes * 60 * 1000, (estBundleBytes / (512 * 1024)) * 1000);
   await Job.updateOne({ _id: job._id }, { deadlineAt: new Date(jobStartTime + jobTimeoutMs) });
 
   /** Check if the overall job timeout has been exceeded */

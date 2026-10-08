@@ -31,7 +31,9 @@ export const config = {
   // small ones. jobMaxBundleMb can cap a single job (off by default: bundles
   // stream straight to storage, so any size works). An identical request within jobReuseHours joins
   // the existing job or gets its finished bundle instead of building another.
-  fastLaneMaxMb: parseInt(process.env.JOB_FAST_LANE_MAX_MB || "1024", 10),
+  // 200 MB: at 1 GB, three ~1 GB requests filled the fast lane in the download-rush
+  // test and a 13-game bundle waited behind them.
+  fastLaneMaxMb: parseInt(process.env.JOB_FAST_LANE_MAX_MB || "200", 10),
   /** 0 = no limit (the default since bundles stream straight to storage). */
   jobMaxBundleMb: parseInt(process.env.JOB_MAX_BUNDLE_MB || "0", 10),
   jobReuseHours: parseInt(process.env.JOB_REUSE_HOURS || "48", 10),
@@ -49,10 +51,10 @@ export const config = {
   // the rest wait up to replayStreamWaitMs, then get 503 storage_busy.
   replayStreamsMax: parseInt(process.env.REPLAY_STREAMS_MAX || "8", 10),
   replayStreamWaitMs: parseInt(process.env.REPLAY_STREAM_WAIT_MS || "15000", 10),
-  // Replay bytes per second over the uplink, shared by all replay streams: ~36 Mbit
-  // of the ~53, so searches and pages keep the rest (BytePacer). With gzip they used
-  // under ~5 Mbit at 1,000 visitors in the 2026-10-07 launch test.
-  replayBytesPerSec: parseInt(process.env.REPLAY_BYTES_PER_SEC || "4500000", 10),
+  // Heavy bytes per second over the home uplink, shared by replay downloads and
+  // bundle uploads (services/uplink.ts): ~40 Mbit of the ~53, so searches and pages
+  // always keep the rest. REPLAY_BYTES_PER_SEC is the older name for it.
+  uplinkBytesPerSec: parseInt(process.env.UPLINK_BYTES_PER_SEC || process.env.REPLAY_BYTES_PER_SEC || "5000000", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly
