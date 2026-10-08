@@ -45,6 +45,10 @@ export const config = {
   queryMaxHeavy: parseInt(process.env.QUERY_MAX_HEAVY || "6", 10),
   /** Stop counting here and report "N+" (0 = always exact, the default: the user wants real totals). */
   countCap: parseInt(process.env.COUNT_CAP || "0", 10),
+  // Concurrent replay downloads over the home uplink (services/replayStreams.ts);
+  // the rest wait up to replayStreamWaitMs, then get 503 storage_busy.
+  replayStreamsMax: parseInt(process.env.REPLAY_STREAMS_MAX || "8", 10),
+  replayStreamWaitMs: parseInt(process.env.REPLAY_STREAM_WAIT_MS || "15000", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly

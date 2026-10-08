@@ -17,6 +17,7 @@ import { DownloadEvent } from "../models/DownloadEvent";
 import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
+import { StreamGate } from "../services/replayStreams";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { sanitizeFilters } from "../utils/sanitizeFilters";
 
@@ -321,6 +322,8 @@ const downloadLimiter = createRateLimiter({
   message: { error: "Too many download requests, please try again later" },
 });
 
+const replayStreams = new StreamGate(config.replayStreamsMax);
+
 // GET /api/replays/:id/download — serve the .slp file directly
 router.get("/:id/download", downloadLimiter, async (req: Request, res: Response) => {
   try {
@@ -335,6 +338,15 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       res.status(403).json({ error: "File path outside allowed directory" });
       return;
     }
+    const release = await replayStreams.acquire(config.replayStreamWaitMs);
+    if (!release) {
+      res.setHeader("Retry-After", "5");
+      sendApiError(res, 503, "storage_busy", { error: "Replays are busy, please try again shortly" });
+      return;
+    }
+    res.on("close", release);
+    if (req.destroyed) return; // the visitor left while waiting; close frees the slot
+
     // Log download event for analytics
     const clientId = req.headers["x-client-id"] as string | undefined;
     DownloadEvent.create({
