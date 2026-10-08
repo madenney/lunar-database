@@ -4,6 +4,7 @@
  */
 import mongoose from "mongoose";
 import { REPLAY_SOURCES } from "../models/Replay";
+import { tournamentKeyMatch } from "./replaySearchQuery";
 
 export const CLIP_TYPES = ["combo", "edgeguard", "quitout"] as const;
 export const CLIP_COUNT_CAP = 10_000;
@@ -97,7 +98,9 @@ export async function applyTournamentFilter(
   if (!keys.length) return null;
   const games = await mongoose.connection
     .collection("replays")
-    .find({ tournamentKey: oneOrIn(keys) }, { projection: { _id: 1 }, limit: MAX_TOURNAMENT_GAMES, maxTimeMS: 8000 })
+    // tournamentKeyMatch: the partial tournament index is only narrowed by key
+    // when the query restates its $type filter.
+    .find({ tournamentKey: tournamentKeyMatch(keys) }, { projection: { _id: 1 }, limit: MAX_TOURNAMENT_GAMES, maxTimeMS: 8000 })
     .toArray();
   filter.replayId = { $in: games.map((g) => g._id) };
   return { replayId: 1 };

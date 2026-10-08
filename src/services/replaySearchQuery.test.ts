@@ -61,8 +61,13 @@ describe("buildReplaySearchQuery two-sided matchups", () => {
 
 describe("buildReplaySearchQuery tournaments", () => {
   it("matches one or several tournament keys and drops invalid ones", () => {
-    expect(inner({ tournament: "KOTJ-7" }).tournamentKey).toBe("kotj-7");
-    expect(inner({ tournament: "kotj-7, midlane-melee-177,kotj-7" }).tournamentKey).toEqual({ $in: ["kotj-7", "midlane-melee-177"] });
+    // Always with $type: "string", which lets MongoDB narrow the partial
+    // tournament index by key (without it, it scanned all ~440k entries).
+    expect(inner({ tournament: "KOTJ-7" }).tournamentKey).toEqual({ $eq: "kotj-7", $type: "string" });
+    expect(inner({ tournament: "kotj-7, midlane-melee-177,kotj-7" }).tournamentKey).toEqual({
+      $in: ["kotj-7", "midlane-melee-177"],
+      $type: "string",
+    });
     expect(inner({ tournament: "$ne,../x" }).tournamentKey).toBeUndefined();
   });
 });

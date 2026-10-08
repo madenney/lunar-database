@@ -159,6 +159,16 @@ export function replayIdList(v: unknown): string[] {
   return [...out];
 }
 
+/**
+ * The tournamentKey condition for these keys, usable by the partial index
+ * { tournamentKey: 1, startAt: -1 } (partialFilterExpression: tournamentKey is
+ * a string): the `$type` makes the index eligible, so it's scanned only for
+ * these keys. Every query on tournamentKey should use this.
+ */
+export function tournamentKeyMatch(keys: string[]): Record<string, unknown> {
+  return keys.length === 1 ? { $eq: keys[0], $type: "string" } : { $in: keys, $type: "string" };
+}
+
 /** Valid, de-duplicated tournament keys from a comma-joined param. */
 export function tournamentKeys(param: string | undefined): string[] {
   return Array.from(new Set(splitParam(param).map((k) => k.toLowerCase()).filter((k) => TOURNAMENT_KEY_RE.test(k))));
@@ -254,12 +264,12 @@ export function buildReplaySearchQuery(params: ReplaySearchParams): Record<strin
   const ids = replayIdList(params.replayIds);
   if (ids.length) query._id = { $in: ids.map((id) => new Types.ObjectId(id)) };
 
+  // `$type: "string"` restates the tournament index's partialFilterExpression.
+  // MongoDB only narrows a partial index by a field when the query visibly
+  // implies that filter; a bare equality doesn't, so it scanned all ~440k
+  // tournament-tagged replays (KOTJ #7: 441 ms -> 0 ms). See tournamentKeyMatch.
   const tournaments = tournamentKeys(params.tournament);
-  if (tournaments.length === 1) {
-    query.tournamentKey = tournaments[0];
-  } else if (tournaments.length > 1) {
-    query.tournamentKey = { $in: tournaments };
-  }
+  if (tournaments.length) query.tournamentKey = tournamentKeyMatch(tournaments);
 
   if (params.startDate || params.endDate) {
     query.startAt = {};
