@@ -49,9 +49,10 @@ export const config = {
   // the rest wait up to replayStreamWaitMs, then get 503 storage_busy.
   replayStreamsMax: parseInt(process.env.REPLAY_STREAMS_MAX || "8", 10),
   replayStreamWaitMs: parseInt(process.env.REPLAY_STREAM_WAIT_MS || "15000", 10),
-  // Replay bytes per second over the uplink, shared by all replay streams: ~24 Mbit
-  // of the ~53, so searches and pages keep the rest (BytePacer).
-  replayBytesPerSec: parseInt(process.env.REPLAY_BYTES_PER_SEC || "3000000", 10),
+  // Replay bytes per second over the uplink, shared by all replay streams: ~36 Mbit
+  // of the ~53, so searches and pages keep the rest (BytePacer). With gzip they used
+  // under ~5 Mbit at 1,000 visitors in the 2026-10-07 launch test.
+  replayBytesPerSec: parseInt(process.env.REPLAY_BYTES_PER_SEC || "4500000", 10),
 
   // Full-DB download throttle. The full-DB bundle is ~1.3 TB — a handful of pulls
   // dominate all B2 egress (one client pulled it 4× in a day, almost certainly
