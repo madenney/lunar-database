@@ -1,4 +1,4 @@
-import { buildReplaySearchQuery, replayIdList, MAX_REPLAY_IDS } from "./replaySearchQuery";
+import { buildReplaySearchQuery, replayIdList, MAX_REPLAY_IDS, parseSort } from "./replaySearchQuery";
 import { parseFilter, hasFilterOrLimit, MAX_SIZE_MB } from "./replayFilter";
 
 // Pure query-building tests: no MongoDB connection is needed.
@@ -114,5 +114,15 @@ describe("replayIdList", () => {
   it("caps the list", () => {
     const many = Array.from({ length: MAX_REPLAY_IDS + 5 }, (_, i) => i.toString(16).padStart(24, "0"));
     expect(replayIdList(many)).toHaveLength(MAX_REPLAY_IDS);
+  });
+});
+
+describe("parseSort", () => {
+  it("sorts by game date only; anything else falls back to newest", () => {
+    expect(parseSort("startAt:1")).toEqual({ startAt: 1 });
+    expect(parseSort("startAt:-1")).toEqual({ startAt: -1 });
+    for (const s of ["indexedAt:-1", "duration:-1", "fileSize:1", "startAt:2", "", undefined]) {
+      expect(parseSort(s)).toEqual({ startAt: -1 });
+    }
   });
 });

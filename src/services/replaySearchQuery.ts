@@ -39,7 +39,10 @@ export interface ReplaySearchParams {
   sort?: string;
 }
 
-const SORT_ALLOWLIST = ["startAt", "indexedAt", "duration"];
+// Date only. Upload-date and length sorts were dropped from the site, and no index
+// serves them on a matchup or source: one "most recent" Fox-Falco search sorted
+// ~470k games in memory (13 s), so any caller could tie up the database.
+const SORT_ALLOWLIST = ["startAt"];
 
 // Ranked replays are anonymized: each player's displayName is their rank tier
 // rather than a name. These are the only tiers present in the dataset — there is

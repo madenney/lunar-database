@@ -3,6 +3,7 @@ import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import { config } from "./config";
 import { cfKeyGenerator, createRateLimiter } from "./utils/rateLimiter";
 import { connectDb } from "./db";
@@ -111,6 +112,11 @@ async function main() {
 
   // Security headers
   app.use(helmet());
+
+  // Every response crosses the home uplink (~53 Mbit/s) through the tunnel. In the
+  // 2026-10-07 launch test, uncompressed search/page JSON alone filled it at 1,000
+  // visitors. JSON gzips ~10x. (Replay .slp downloads gzip themselves in their route.)
+  app.use(compression({ threshold: 1024 }));
 
   app.use(cors({
     origin: [

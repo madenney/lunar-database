@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
+import zlib from "zlib";
+import { pipeline } from "stream/promises";
 import { Replay } from "../models/Replay";
 import { GameStats } from "../models/GameStats";
 import { Tournament } from "../models/Tournament";
@@ -343,6 +345,19 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       replayCount: 1,
     }).catch(() => {});
 
+    // A .slp gzips 4-6x for ~80 ms of CPU, and every replay view crosses the home
+    // uplink (~5 MB/s), so compress whenever the caller accepts it (the website's
+    // fetch does). Range requests get the plain file.
+    if (!req.headers.range && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+      res.attachment(path.basename(resolved));
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      pipeline(fs.createReadStream(resolved), zlib.createGzip({ level: 6 }), res).catch(() => {
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy();
+      });
+      return;
+    }
     res.download(resolved, path.basename(resolved));
   } catch (err) {
     sendError(res, err);

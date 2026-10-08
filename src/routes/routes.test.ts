@@ -1300,3 +1300,40 @@ describe("GET /api/players/autocomplete — collection aliases", () => {
     expect((await get("/api/players/search?q=eikel")).body.map((p: any) => p.connectCode)).toEqual(["TX#490"]);
   });
 });
+
+describe("GET /api/replays/:id/download", () => {
+  it("gzips the .slp when the caller accepts gzip, and sends it plain otherwise or for a range", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "lm-dl-"));
+    const prevRoot = config.slpRootDir;
+    config.slpRootDir = root;
+    try {
+      const bytes = Buffer.alloc(200_000, "slp-frame-data ");
+      fs.writeFileSync(path.join(root, "game.slp"), bytes);
+      const r = await Replay.create({ filePath: "game.slp", fileHash: "dl1", fileSize: bytes.length, players: [] });
+      const url = `${baseUrl}/api/replays/${r._id}/download`;
+
+      const gz = await new Promise<{ headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+        http.get(url, { headers: { "accept-encoding": "gzip" } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
+        }).on("error", reject);
+      });
+      expect(gz.headers["content-encoding"]).toBe("gzip");
+      expect(gz.headers["content-disposition"]).toContain("game.slp");
+      expect(gz.body.length).toBeLessThan(bytes.length / 4);
+      expect(zlib.gunzipSync(gz.body).equals(bytes)).toBe(true);
+
+      const plain = await fetch(url, { headers: { "accept-encoding": "identity" } });
+      expect(plain.headers.get("content-encoding")).toBeNull();
+      expect(Buffer.from(await plain.arrayBuffer()).equals(bytes)).toBe(true);
+
+      const ranged = await fetch(url, { headers: { "accept-encoding": "gzip", range: "bytes=0-9" } });
+      expect(ranged.status).toBe(206);
+      expect(Buffer.from(await ranged.arrayBuffer()).equals(bytes.subarray(0, 10))).toBe(true);
+    } finally {
+      config.slpRootDir = prevRoot;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
