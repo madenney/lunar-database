@@ -1,3 +1,5 @@
+import { Transform } from "stream";
+
 /**
  * A cap on concurrent replay downloads. Every replay view streams its .slp over the
  * home uplink (~53 Mbit/s), the same link every search and page answer crosses. In
@@ -44,5 +46,38 @@ export class StreamGate {
       if (next) next(); // the slot passes straight to the next waiter
       else this.active--;
     };
+  }
+}
+
+/**
+ * A shared byte-rate budget for replay downloads. The concurrency gate alone isn't
+ * enough: cloudflared reads each response from the API at local speed and buffers
+ * it, so a stream "finishes" here long before its bytes cross the uplink, and the
+ * queue just moves into the tunnel (the 2026-10-07 retest: no gate waits, replays
+ * still 32 s, uplink full, pages slow). Pacing every replay chunk through one
+ * budget keeps replays to part of the uplink; chunks from all streams take turns.
+ */
+export class BytePacer {
+  private nextFree = 0;
+
+  constructor(private readonly bytesPerSec: number, private readonly now: () => number = Date.now) {}
+
+  /** Milliseconds to wait before sending n bytes (and books them). */
+  reserve(n: number): number {
+    const t = this.now();
+    const start = Math.max(t, this.nextFree);
+    this.nextFree = start + (n / this.bytesPerSec) * 1000;
+    return start - t;
+  }
+
+  /** A pass-through stream that sends at most this pacer's budget, shared with every other stream. */
+  stream(): Transform {
+    return new Transform({
+      transform: (chunk: Buffer, _enc, done) => {
+        const wait = this.reserve(chunk.length);
+        if (wait <= 0) done(null, chunk);
+        else setTimeout(() => done(null, chunk), wait);
+      },
+    });
   }
 }
