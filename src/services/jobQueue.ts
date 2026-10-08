@@ -108,34 +108,80 @@ function remainingBytes(j: IJobLike): number {
 
 let rateCache: { at: number; bps: number } | null = null;
 
+/** Forecasts plan with this share of the measured speed, so most people are ready early, not late. */
+export const FORECAST_MARGIN = 0.8;
+
 /**
- * Pipeline throughput in bundle bytes/second: median of recent jobs' bundle size
- * over their run time (claim to completion). Recomputed every 10 minutes.
+ * Bytes per second the whole pipeline moved: the bytes of these finished jobs
+ * over the time at least one of them was running (overlaps counted once). Null
+ * when there's too little to go on (< 10 busy minutes or < 200 MB).
+ */
+export function pipelineRate(jobs: { start: number; end: number; bytes: number }[]): number | null {
+  const spans = jobs.filter((j) => j.end > j.start && j.bytes > 0).sort((a, b) => a.start - b.start);
+  let busyMs = 0;
+  let bytes = 0;
+  let curStart = -1;
+  let curEnd = -1;
+  for (const j of spans) {
+    bytes += j.bytes;
+    if (j.start > curEnd) {
+      if (curEnd > curStart) busyMs += curEnd - curStart;
+      curStart = j.start;
+      curEnd = j.end;
+    } else curEnd = Math.max(curEnd, j.end);
+  }
+  if (curEnd > curStart) busyMs += curEnd - curStart;
+  if (busyMs < 10 * 60 * 1000 || bytes < 200 * MB) return null;
+  return bytes / (busyMs / 1000);
+}
+
+/**
+ * Pipeline throughput in bundle bytes/second, for the forecasts. Measured from
+ * the last 6 hours of finished jobs (pipelineRate): bundles share a paced uplink
+ * budget with replay views, so the real rate depends on how busy the site is.
+ * Falls back to the median single-job rate of recent big jobs, then to the
+ * configured speed; never above the uplink budget. Recomputed every 10 minutes.
+ * (Before 2026-10-08 it used single-job rates from unpaced uploads and promised
+ * waits 2-4x too short.)
  */
 export async function throughputBps(): Promise<number> {
   if (CACHING && rateCache && Date.now() - rateCache.at < 10 * 60 * 1000) return rateCache.bps;
-  const fallback = config.estimateUploadSpeedMbps * 125_000;
-  let bps = fallback;
+  let bps = config.estimateUploadSpeedMbps * 125_000;
   try {
     const recent = await Job.find({
       status: "completed",
       isFullDb: { $ne: true },
-      bundleSize: { $gt: 50 * MB },
+      bundleSize: { $gt: 0 },
       startedAt: { $ne: null },
-      completedAt: { $gte: new Date(Date.now() - 30 * 86400 * 1000) },
+      completedAt: { $gte: new Date(Date.now() - 6 * 3600 * 1000) },
     })
-      .sort({ completedAt: -1 })
-      .limit(25)
       .select("bundleSize startedAt completedAt")
+      .limit(1000)
       .lean();
-    const rates = recent
-      .map((j) => (j.bundleSize ?? 0) / Math.max(1, (j.completedAt!.getTime() - j.startedAt!.getTime()) / 1000))
-      .filter((r) => r > 0)
-      .sort((a, b) => a - b);
-    if (rates.length >= 3) bps = rates[Math.floor(rates.length / 2)];
+    const measured = pipelineRate(recent.map((j) => ({ start: j.startedAt!.getTime(), end: j.completedAt!.getTime(), bytes: j.bundleSize ?? 0 })));
+    if (measured) bps = measured;
+    else {
+      const big = await Job.find({
+        status: "completed",
+        isFullDb: { $ne: true },
+        bundleSize: { $gt: 50 * MB },
+        startedAt: { $ne: null },
+        completedAt: { $gte: new Date(Date.now() - 30 * 86400 * 1000) },
+      })
+        .sort({ completedAt: -1 })
+        .limit(25)
+        .select("bundleSize startedAt completedAt")
+        .lean();
+      const rates = big
+        .map((j) => (j.bundleSize ?? 0) / Math.max(1, (j.completedAt!.getTime() - j.startedAt!.getTime()) / 1000))
+        .filter((r) => r > 0)
+        .sort((a, b) => a - b);
+      if (rates.length >= 3) bps = rates[Math.floor(rates.length / 2)];
+    }
   } catch {
     /* keep the fallback */
   }
+  bps = Math.min(bps, config.uplinkBytesPerSec) * FORECAST_MARGIN;
   rateCache = { at: Date.now(), bps };
   return bps;
 }

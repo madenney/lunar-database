@@ -44,7 +44,7 @@ function getClient(): S3Client {
         connectionTimeout: 3000,
         // requestTimeout caps a single HTTP request. Multi-GB bundles upload in
         // multipart chunks (see uploadToStorage), and a single ~16MB+ part on a
-        // home uplink can take far longer than a few seconds — a low value here
+        // server's uplink can take far longer than a few seconds — a low value here
         // makes every part time out, retry, and stall the whole upload (bytes
         // frozen). connectionTimeout (3s) still catches the IPv6/dead-connect
         // hang this handler was added for; 5min is just a backstop so a truly

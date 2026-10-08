@@ -1,4 +1,4 @@
-import { filterKey, laneFor, simulateQueue, type IJobLike } from "./jobQueue";
+import { filterKey, laneFor, pipelineRate, simulateQueue, type IJobLike } from "./jobQueue";
 
 const MB = 1024 * 1024;
 const job = (id: string, mb: number, at: number, extra: Partial<IJobLike> = {}): IJobLike => ({
@@ -51,5 +51,28 @@ describe("simulateQueue", () => {
     const order = ["tiny", "small", "m2", "m1"].map((id) => f.get(id)!.startSec);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(f.get("tiny")!.startSec).toBe(0);
+  });
+});
+
+describe("pipelineRate", () => {
+  const min = 60_000;
+  it("counts overlapping jobs' time once and sums their bytes", () => {
+    // Two jobs running side by side for 10 minutes, 300 MB each: 600 MB over 600 s.
+    const r = pipelineRate([
+      { start: 0, end: 10 * min, bytes: 300 * MB },
+      { start: 0, end: 10 * min, bytes: 300 * MB },
+    ]);
+    expect(r).toBeCloseTo(MB, 0);
+  });
+  it("leaves idle gaps out of the busy time", () => {
+    const r = pipelineRate([
+      { start: 0, end: 5 * min, bytes: 300 * MB },
+      { start: 60 * min, end: 65 * min, bytes: 300 * MB },
+    ]);
+    expect(r).toBeCloseTo(MB, 0);
+  });
+  it("needs enough to go on", () => {
+    expect(pipelineRate([{ start: 0, end: 5 * min, bytes: 500 * MB }])).toBeNull();
+    expect(pipelineRate([{ start: 0, end: 20 * min, bytes: 100 * MB }])).toBeNull();
   });
 });

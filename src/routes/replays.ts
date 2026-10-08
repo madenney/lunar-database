@@ -358,7 +358,7 @@ router.get("/:id/download", downloadLimiter, async (req: Request, res: Response)
       replayCount: 1,
     }).catch(() => {});
 
-    // A .slp gzips 4-6x for ~80 ms of CPU, and every replay view crosses the home
+    // A .slp gzips 4-6x for ~80 ms of CPU, and every replay view crosses the server's
     // uplink (~5 MB/s), so compress whenever the caller accepts it (the website's
     // fetch does). Range requests get the plain file.
     if (!req.headers.range && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {

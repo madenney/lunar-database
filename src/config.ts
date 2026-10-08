@@ -47,11 +47,11 @@ export const config = {
   queryMaxHeavy: parseInt(process.env.QUERY_MAX_HEAVY || "6", 10),
   /** Stop counting here and report "N+" (0 = always exact, the default: the user wants real totals). */
   countCap: parseInt(process.env.COUNT_CAP || "0", 10),
-  // Concurrent replay downloads over the home uplink (services/replayStreams.ts);
+  // Concurrent replay downloads over the server's uplink (services/replayStreams.ts);
   // the rest wait up to replayStreamWaitMs, then get 503 storage_busy.
   replayStreamsMax: parseInt(process.env.REPLAY_STREAMS_MAX || "8", 10),
   replayStreamWaitMs: parseInt(process.env.REPLAY_STREAM_WAIT_MS || "15000", 10),
-  // Heavy bytes per second over the home uplink, shared by replay downloads and
+  // Heavy bytes per second over the server's uplink, shared by replay downloads and
   // bundle uploads (services/uplink.ts): ~40 Mbit of the ~53, so searches and pages
   // always keep the rest. REPLAY_BYTES_PER_SEC is the older name for it.
   uplinkBytesPerSec: parseInt(process.env.UPLINK_BYTES_PER_SEC || process.env.REPLAY_BYTES_PER_SEC || "5000000", 10),

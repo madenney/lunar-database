@@ -2,9 +2,9 @@ import { Transform } from "stream";
 
 /**
  * A cap on concurrent replay downloads. Every replay view streams its .slp over the
- * home uplink (~53 Mbit/s), the same link every search and page answer crosses. In
+ * server's uplink (~53 Mbit/s), the same link every search and page answer crosses. In
  * the 2026-10-07 launch test, 500 visitors opening replays filled it: replays timed
- * out at 30 s and the home page's p95 reached 11 s. With a few streams at a time
+ * out at 30 s and the front page's p95 reached 11 s. With a few streams at a time
  * the uplink still carries the same replays per second, the rest wait their turn
  * (FIFO), and a waiter that can't start in time gets a quick "busy" instead.
  */

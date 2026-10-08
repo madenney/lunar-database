@@ -29,7 +29,7 @@ import submissionsRoutes from "./routes/submissions";
 import adminRoutes from "./routes/admin";
 
 // Outbound socket errors during long multi-GB uploads to Backblaze (a broken
-// pipe / reset connection — routine on a home uplink over hours) surface as
+// pipe / reset connection — routine on a long upload over hours) surface as
 // unhandled 'error' events on the TLS socket and would otherwise crash the
 // ENTIRE API, killing the public site and discarding upload progress. These are
 // benign to process state, so we log and keep running — the upload's own retry
@@ -113,7 +113,7 @@ async function main() {
   // Security headers
   app.use(helmet());
 
-  // Every response crosses the home uplink (~53 Mbit/s) through the tunnel. In the
+  // Every response crosses the server's uplink (~53 Mbit/s) through the tunnel. In the
   // 2026-10-07 launch test, uncompressed search/page JSON alone filled it at 1,000
   // visitors. JSON gzips ~10x. (Replay .slp downloads gzip themselves in their route.)
   app.use(compression({ threshold: 1024 }));
