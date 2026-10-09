@@ -27,6 +27,7 @@ import clipRoutes from "./routes/clips";
 import referenceRoutes from "./routes/reference";
 import submissionsRoutes from "./routes/submissions";
 import adminRoutes from "./routes/admin";
+import { apiIndex, corsFor, openApiSpec } from "./publicApi";
 
 // Outbound socket errors during long multi-GB uploads to Backblaze (a broken
 // pipe / reset connection — routine on a long upload over hours) surface as
@@ -110,26 +111,20 @@ async function main() {
   // Trust first proxy (Cloudflare Tunnel)
   app.set("trust proxy", 1);
 
-  // Security headers
-  app.use(helmet());
+  // Security headers. Public reads may be fetched from any site (see publicApi.ts).
+  app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
   // Every response crosses the server's uplink (~53 Mbit/s) through the tunnel. In the
   // 2026-10-07 launch test, uncompressed search/page JSON alone filled it at 1,000
   // visitors. JSON gzips ~10x. (Replay .slp downloads gzip themselves in their route.)
   app.use(compression({ threshold: 1024 }));
 
-  app.use(cors({
-    origin: [
-      "https://lunarmelee.com",
-      "https://www.lunarmelee.com",
-      ...(process.env.NODE_ENV === "development" ? ["http://localhost:3000", "http://localhost:3001"] : []),
-    ],
-  }));
+  app.use(cors(corsFor));
   // 4 MB: an explicit-list export can name up to 100,000 replay ids (~2.7 MB).
   app.use(express.json({ limit: "4mb" }));
 
   // Recognise the website (shared service key) before anything reads identity
-  // headers or rate-limits; untrusted callers lose X-Client-Id once a key is set.
+  // headers or rate-limits; other callers' X-Client-Id gets its own namespace.
   app.use(identifyServiceCaller);
 
   // Validate X-Client-Id header format globally (prevents NoSQL injection)
@@ -164,6 +159,11 @@ async function main() {
   app.use("/api/reference", referenceRoutes);
   app.use("/api/submissions", submissionsRoutes);
   app.use("/api/admin", adminRoutes);
+
+  // The public API's spec and a pointer to its docs.
+  const docsLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
+  app.get("/openapi.json", docsLimiter, openApiSpec);
+  app.get("/", docsLimiter, apiIndex);
 
   // Health check
   const healthLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });

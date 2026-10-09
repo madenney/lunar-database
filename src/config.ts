@@ -86,6 +86,9 @@ export const config = {
    *  Empty = no website trust: rate limits key on the connecting IP and any
    *  caller's X-Client-Id is accepted, as before. */
   serviceKey: process.env.LUNAR_SERVICE_KEY || "",
+  // The website, where the public developer docs live and where a direct API
+  // caller's replay download is sent (served from storage, cached at the edge).
+  publicSiteUrl: (process.env.PUBLIC_SITE_URL || "https://lunarmelee.com").replace(/\/$/, ""),
   slpzTimeoutMinutes: parseInt(process.env.SLPZ_TIMEOUT_MINUTES || "30", 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB || "2048", 10),
 

@@ -1,0 +1,4460 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lunar Melee API",
+    "version": "1.0.0",
+    "summary": "Free access to millions of Super Smash Bros. Melee Slippi replays, their stats, players and tournaments.",
+    "description": "The Lunar Melee API is free, read-only access to the Lunar database: over three million Slippi replays of Super Smash Bros. Melee from tournaments, netplay and Slippi ranked, with extracted stats, player profiles, tournament brackets and a searchable index of combos and edgeguards.\n\nEverything the [Lunar Melee website](https://lunarmelee.com) shows comes from this API, and you can use it the same way: search games, read their stats, download replays one at a time or in bulk.\n\n- **Base URL:** `https://api.lunarmelee.com`\n- **Format:** JSON over HTTPS. Dates are ISO 8601 in UTC; durations are in frames (60 per second).\n- **Authentication:** none. Bulk download jobs only need an `X-Client-Id` you make up yourself (see [Identifying your client](#guide-client-id)).\n- **Browsers:** CORS is open, so you can call the API from any web page.\n- **Spec:** the whole API as [OpenAPI 3.1](https://api.lunarmelee.com/openapi.json), for Postman, Insomnia or code generators.\n\nLunar is free and runs on a single server. Please read [Fair use](#guide-fair-use) before building something that sends a lot of requests.",
+    "contact": {
+      "name": "Lunar Melee on Discord",
+      "url": "https://discord.gg/ThjMCW3F4R"
+    },
+    "termsOfService": "https://lunarmelee.com/developers#guide-fair-use"
+  },
+  "externalDocs": {
+    "description": "Developer docs",
+    "url": "https://lunarmelee.com/developers"
+  },
+  "servers": [
+    {
+      "url": "https://api.lunarmelee.com",
+      "description": "Production"
+    }
+  ],
+  "security": [
+    {}
+  ],
+  "tags": [
+    {
+      "name": "Replays",
+      "description": "Search games, read their details and stats, download them."
+    },
+    {
+      "name": "Clips",
+      "description": "Combos, edgeguards and quit-outs, found in every processed game."
+    },
+    {
+      "name": "Bulk downloads",
+      "description": "Any search as one zip: estimate, create a job, wait, download. Also the whole database.",
+      "x-order": [
+        "estimateDownload",
+        "createJob",
+        "getJob",
+        "downloadJob",
+        "cancelJob",
+        "listJobs",
+        "getQueue",
+        "listBundles"
+      ]
+    },
+    {
+      "name": "Players",
+      "description": "Find players and their career stats."
+    },
+    {
+      "name": "Tournaments",
+      "description": "Tournaments, their brackets and sets."
+    },
+    {
+      "name": "Archive",
+      "description": "Totals for the whole archive."
+    },
+    {
+      "name": "Reference",
+      "description": "Character and stage ids."
+    },
+    {
+      "name": "Status",
+      "description": "Health checks and this spec."
+    }
+  ],
+  "x-guides": [
+    {
+      "id": "introduction",
+      "title": "Introduction",
+      "body": "The Lunar Melee API is free, read-only access to the Lunar database: over three million Slippi replays of Super Smash Bros. Melee from tournaments, netplay and Slippi ranked, with extracted stats, player profiles, tournament brackets and a searchable index of combos and edgeguards.\n\nEverything the [Lunar Melee website](https://lunarmelee.com) shows comes from this API, and you can use it the same way: search games, read their stats, download replays one at a time or in bulk.\n\n- **Base URL:** `https://api.lunarmelee.com`\n- **Format:** JSON over HTTPS. Dates are ISO 8601 in UTC; durations are in frames (60 per second).\n- **Authentication:** none. Bulk download jobs only need an `X-Client-Id` you make up yourself (see [Identifying your client](#guide-client-id)).\n- **Browsers:** CORS is open, so you can call the API from any web page.\n- **Spec:** the whole API as [OpenAPI 3.1](https://api.lunarmelee.com/openapi.json), for Postman, Insomnia or code generators.\n\nLunar is free and runs on a single server. Please read [Fair use](#guide-fair-use) before building something that sends a lot of requests."
+    },
+    {
+      "id": "quickstart",
+      "title": "Quickstart",
+      "body": "**1. Find games.** Fox vs Falco on Battlefield, tournament games only, newest first:\n\n```bash\ncurl \"https://api.lunarmelee.com/api/replays?p1CharacterId=2&p2CharacterId=20&stageId=31&source=tournament&limit=5\"\n```\n\nCharacter and stage ids come from [Reference data](#tag-reference): Fox is `2`, Falco `20`, Battlefield `31`.\n\n**2. Read a game's stats.** Kills, openings, damage, neutral wins, combos, edgeguards and more:\n\n```bash\ncurl \"https://api.lunarmelee.com/api/replays/6abd2df68fe2062a80e9c4a5/stats\"\n```\n\n**3. Download the replay.** Opens in Slippi Dolphin like any other `.slp` file:\n\n```bash\ncurl -L --compressed -OJ \"https://api.lunarmelee.com/api/replays/6abd2df68fe2062a80e9c4a5/download\"\n```\n\n`-L` follows the redirect to our storage-backed copy, `--compressed` undoes the transfer compression and `-OJ` saves it under its original file name.\n\n**4. Need thousands of games?** Don't loop over single downloads: ask for a [bulk download](#guide-bulk-downloads) and get them all in one zip."
+    },
+    {
+      "id": "client-id",
+      "title": "Identifying your client",
+      "body": "Reading needs no identification. Bulk download jobs do, so the API knows which jobs are yours: send an `X-Client-Id` header with a UUID (version 4 is fine) that you generate once and keep.\n\n```bash\n# Make one, keep it in your config:\npython3 -c \"import uuid; print(uuid.uuid4())\"\n```\n\n- Use the same id for every request about your jobs: creating, listing, checking and cancelling.\n- Anyone with your id can see and cancel your jobs, so keep it to yourself; it grants nothing else.\n- Ids sent to the API live in their own space: they never collide with the website's visitors.\n\nPlease also set a descriptive `User-Agent` (e.g. `my-melee-tool/1.2 (+https://example.com)`), so we can get in touch if something you run misbehaves."
+    },
+    {
+      "id": "rate-limits",
+      "title": "Rate limits",
+      "body": "Limits are per IP address, over a rolling window. Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds until the window resets); a refused request gets `429` with code `rate_limited` and a `Retry-After` header.\n\n| What | Limit |\n|---|---|\n| Everything together | 100 requests / minute |\n| Replay search | 30 / minute |\n| Single replay, replay stats | 60 / minute |\n| Replay downloads | 30 / minute |\n| Clip search | 30 / minute |\n| Download estimates | 15 / minute |\n| Creating download jobs | 5 / hour |\n| Checking a job | 60 / minute |\n| Player search and autocomplete | 30 / minute |\n| Player profiles, top players, tournaments, sets, stats | 60 / minute |\n| Full-database download links | 2 per 24 hours |\n\nOn a `429`, wait `Retry-After` seconds before trying again; don't retry in a tight loop. If your project needs more, ask in [Discord](https://discord.gg/ThjMCW3F4R)."
+    },
+    {
+      "id": "errors",
+      "title": "Errors",
+      "body": "Errors are JSON with a plain-English `error`. Many also carry a machine-readable `code` (and sometimes extra fields): branch on `code`, not on the message, which may change.\n\n```json\n{ \"error\": \"You already have 3 active job(s). Maximum is 3.\", \"code\": \"too_many_active_jobs\", \"limit\": 3 }\n```\n\n| Code | Status | Meaning |\n|---|---|---|\n| `filter_required` | 400 | An estimate or job without any filter or limit. |\n| `invalid_request` | 400 | Invalid search parameters (e.g. a clip search without a valid `type`). |\n| `no_matches` | 400 | The filter matches no replays. |\n| `invalid_client` | 400 | A missing or malformed `X-Client-Id` (it must be a UUID). |\n| `cannot_cancel` | 400 | The job is past the point of cancelling. Extra: `status`. |\n| `not_ready` | 400 | The bundle is not built yet. |\n| `too_large` | 400 | The bundle would be bigger than one download may be. Extra: `estimatedBytes`, `maxBytes`. |\n| `forbidden` | 403 | The job belongs to another client. |\n| `not_found` | 404 | No job has this id. |\n| `bundle_missing` | 410 | The job finished, but its bundle has expired from storage. |\n| `rate_limited` | 429 | Too many requests. See `Retry-After`. |\n| `too_many_active_jobs` | 429 | You already have the maximum number of jobs running. Extra: `limit`. |\n| `queue_full` | 429 | The download queue is full. Extra: `pending`, `workSec`. |\n| `fulldb_rate_limited` | 429 | The full-database download limit for your window is used up. Extra: `retryAfterSeconds`. |\n| `download_cap` | 503 | Storage's daily download allowance is used up. Try again tomorrow. |\n| `storage_busy` | 503 | Storage or replay serving is busy. Retry after `Retry-After` seconds. |\n\nOther statuses: `404` for an unknown replay, player, tournament or set (`{ \"error\": \"Replay not found\" }`), and `500` when something fails on our side (safe to retry after a short wait)."
+    },
+    {
+      "id": "pagination",
+      "title": "Pagination",
+      "body": "List endpoints take `page` (from 1) and `limit`, and answer with a `pagination` object:\n\n```json\n{ \"page\": 2, \"limit\": 50, \"total\": 11507, \"pages\": 231 }\n```\n\n- Replay search allows `limit` up to 1,000. Its `total` may stop counting at a cap on very broad searches: then `totalCapped` is `true` and there are at least `total` matches.\n- Clip search counts up to 10,000 (`capped: true` past that) and pages up to 400.\n- Results are sorted newest first unless you choose otherwise, so new games appear on page 1: for a stable walk through a search, sort oldest first (`sort=startAt:1`) or narrow by date."
+    },
+    {
+      "id": "downloads",
+      "title": "Downloading replays",
+      "body": "**One game:** `GET /api/replays/{id}/download` answers with the `.slp` file. Most replays answer with a redirect to the same file on lunarmelee.com, which reads it from storage and caches it worldwide, so follow redirects and accept gzip:\n\n```bash\ncurl -L --compressed -OJ \"https://api.lunarmelee.com/api/replays/6abd2df68fe2062a80e9c4a5/download\"\n```\n\n```js\nconst res = await fetch(\"https://api.lunarmelee.com/api/replays/6abd2df68fe2062a80e9c4a5/download\"); // follows the redirect, undoes gzip\nconst slp = new Uint8Array(await res.arrayBuffer());\n```\n\n```python\nimport requests\nr = requests.get(\"https://api.lunarmelee.com/api/replays/6abd2df68fe2062a80e9c4a5/download\")  # follows the redirect, undoes gzip\nopen(\"game.slp\", \"wb\").write(r.content)\n```\n\n**More than a few dozen games:** use a [bulk download](#guide-bulk-downloads). It's far faster for you and much lighter for us."
+    },
+    {
+      "id": "bulk-downloads",
+      "title": "Bulk downloads",
+      "body": "Any search can become one zip file. The server collects the games, packs them and gives you a download link. Identical requests share one bundle, so popular downloads are often ready immediately.\n\n**1. Estimate** how many games, how big, and how long the wait is:\n\n```bash\ncurl -X POST \"https://api.lunarmelee.com/api/replays/estimate\" -H \"Content-Type: application/json\" \\\n  -d '{\"p1CharacterId\": \"2\", \"source\": \"tournament\", \"maxFiles\": 1000}'\n```\n\n**2. Create the job** with the same filter and your `X-Client-Id`:\n\n```bash\ncurl -X POST \"https://api.lunarmelee.com/api/jobs\" -H \"Content-Type: application/json\" \\\n  -H \"X-Client-Id: $LUNAR_CLIENT_ID\" \\\n  -d '{\"p1CharacterId\": \"2\", \"source\": \"tournament\", \"maxFiles\": 1000}'\n# → { \"jobId\": \"…\", \"status\": \"pending\", \"reused\": false, \"lane\": \"fast\" }\n```\n\n**3. Wait for it.** Poll `GET /api/jobs/{jobId}` every 10–30 seconds; it reports your place in line, progress and an estimated wait. When `downloadReady` is `true`, go on.\n\n**4. Download.** `GET /api/jobs/{jobId}/download` gives a signed `url`, valid for an hour, that supports resuming (HTTP range requests):\n\n```bash\ncurl -L -o fox-tournament.zip \"$(curl -s \"https://api.lunarmelee.com/api/jobs/$JOB/download\" -H \"X-Client-Id: $LUNAR_CLIENT_ID\" | jq -r .url)\"\n```\n\n**5. Unpack.** The zip holds `.slpz` files (Slippi replays, about 8× smaller) and `lunar-manifest.json`, which maps each file to its `replayId` and `fileHash`. Turn them back into `.slp` with [slpz](https://crates.io/crates/slpz) (`cargo install slpz`):\n\n```bash\nunzip fox-tournament.zip -d fox-tournament && slpz -d -r --rm fox-tournament\n```\n\nGood to know:\n- You can have 3 jobs running at once. A finished bundle stays downloadable for 3 days after its last download.\n- Up to 200 MB goes in a fast lane; bigger bundles take longer, roughly 10–20 GB an hour when the server is busy.\n- To download specific games, send `replayIds` (up to 100,000) instead of filters. To download the games behind a clip search, send `clipSearch`.\n- **The whole database** is one ready-made zip (~1.3 TB): find it in `GET /api/jobs/bundles` (`fullDb: true`) and fetch its link from `/api/jobs/{id}/download`. It's a snapshot, so newer games aren't in it; limited to 2 links per 24 hours.\n- `GET /api/jobs/queue` shows the live queue, the same one as [lunarmelee.com/queue](https://lunarmelee.com/queue)."
+    },
+    {
+      "id": "data",
+      "title": "Data notes",
+      "body": "- **Ids.** Replays, jobs and clips have 24-character hex ids. Tournaments have slugs (`kotj-8`), sets have `sgg-…` (start.gg) or `dir-…` ids, and players are identified by their Slippi connect code (`MANG#0`; URL-encode the `#` as `%23`).\n- **Players.** `players` lists every port in the game, in port order. `playerIndex` is the port (0–3). In searches, `p1` and `p2` mean \"one player\" and \"the other player\", whichever ports they used.\n- **Sources.** `tournament` (recorded at events), `netplay` (online: tournaments, unranked and direct games) and `ranked` (Slippi ranked, anonymised: names are rank tiers and dates are missing).\n- **Dates.** `startAt` is when the game started (UTC), or `null` when the console clock was unset or impossible.\n- **Duplicates.** The same game recorded twice is shown once; the extra copies never appear in searches, counts or bundles.\n- **Stats** come from Lunar's own extraction (the same detectors as [Lunar Clipper](https://lunarmelee.com/software)). A game not yet processed has `stats: null`.\n- **Characters and stages** use Slippi's ids and names (`/api/reference/characters`, `/api/reference/stages`).\n- **Privacy.** Only what a replay itself shows is public: connect codes and in-game names. Players' account links and old names are never served."
+    },
+    {
+      "id": "fair-use",
+      "title": "Fair use",
+      "body": "Lunar is a free, ad-free community project on a single server. To keep it that way for everyone:\n\n- **Cache** what you fetch. Replays never change; stats and profiles change at most daily.\n- **Use bulk downloads** for many games, and the full-database zip for everything, instead of looping over single downloads.\n- **Keep it gentle:** a few requests at a time, and back off on `429` and `503`.\n- **Say who you are** with a `User-Agent`, and credit \"Data from Lunar Melee (lunarmelee.com)\" where people will see it. It's appreciated, not required.\n- Don't use the API to identify or track people beyond what their games show.\n\nWe may block traffic that degrades the service for others. Building something bigger, or need higher limits? Talk to us in [Discord](https://discord.gg/ThjMCW3F4R).\n\n**Changes.** New fields and endpoints are added without notice, so ignore fields you don't know. Anything that would break existing clients is announced in Discord first, with the spec's `info.version` bumped."
+    }
+  ],
+  "paths": {
+    "/api/replays": {
+      "get": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "searchReplays",
+        "summary": "Search replays",
+        "description": "Every game matching your filters, newest first. Filters combine: all must match. `p1` and `p2` are \"one player\" and \"the other player\", in any ports, so `p1CharacterId=2&p2CharacterId=20` finds Fox vs Falco whichever port each was on. List values are comma-separated (up to 20).",
+        "x-rate-limit": "30/minute",
+        "parameters": [
+          {
+            "name": "p1ConnectCode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Connect code(s) of one player, comma-separated. Example: `MANG#0`."
+          },
+          {
+            "name": "p1CharacterId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Character id(s) of that player, comma-separated.",
+            "example": "2"
+          },
+          {
+            "name": "p1DisplayName",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Display name(s) of that player (prefix match, any case), comma-separated."
+          },
+          {
+            "name": "p1Rank",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Ranked only: rank tier(s) of that player: `platinum`, `diamond`, `master`."
+          },
+          {
+            "name": "p2ConnectCode",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Connect code(s) of the other player."
+          },
+          {
+            "name": "p2CharacterId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Character id(s) of the other player.",
+            "example": "20"
+          },
+          {
+            "name": "p2DisplayName",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Display name(s) of the other player."
+          },
+          {
+            "name": "p2Rank",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Ranked only: rank tier(s) of the other player."
+          },
+          {
+            "name": "stageId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stage id(s), comma-separated.",
+            "example": "31"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "`tournament`, `netplay`, `ranked`, comma-separated. Example: `tournament`."
+          },
+          {
+            "name": "tournament",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tournament key(s), comma-separated. Example: `kotj-8`."
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Games on or after this date (`YYYY-MM-DD` or ISO 8601). Example: `2024-01-01`."
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Games on or before this date. A date-only value includes that whole day (UTC). Example: `2024-12-31`."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "startAt:-1",
+                "startAt:1"
+              ]
+            },
+            "description": "`startAt:-1` (newest first, default) or `startAt:1` (oldest first). Decides which games a limit keeps."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "Page (from 1)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 50
+            },
+            "description": "Results per page (up to 1,000).",
+            "example": 5
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of games.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "replays": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Replay"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "example": {
+                  "replays": [
+                    {
+                      "_id": "6abd2df68fe2062a80e9c4a5",
+                      "fileHash": "da512d2cee450d44b34c649a9bcfd9cb",
+                      "fileSize": 3998829,
+                      "stageId": 31,
+                      "stageName": "Battlefield",
+                      "startAt": "2026-09-28T23:20:59.410Z",
+                      "startAtRaw": null,
+                      "duration": 10922,
+                      "players": [
+                        {
+                          "playerIndex": 0,
+                          "connectCode": "OSH#0",
+                          "displayName": "blue",
+                          "tag": null,
+                          "characterId": 20,
+                          "characterName": "Falco"
+                        },
+                        {
+                          "playerIndex": 1,
+                          "connectCode": "HUCK#242",
+                          "displayName": "HuckleberryFinn",
+                          "tag": null,
+                          "characterId": 2,
+                          "characterName": "Fox"
+                        }
+                      ],
+                      "winner": null,
+                      "matchId": "mode.direct-2026-09-28T23:19:12.32Z-0",
+                      "gameNumber": 2,
+                      "tiebreaker": 0,
+                      "mode": "direct",
+                      "tournamentKey": "kotj-8",
+                      "setId": "dir-f2308393e531e9a692e5",
+                      "setGame": 1,
+                      "duplicateOf": null,
+                      "charPair": "2-20",
+                      "source": "tournament",
+                      "usable": true,
+                      "viewCount": 12,
+                      "indexedAt": "2026-09-30T15:42:29.990Z",
+                      "tournamentName": "KOTJ #8",
+                      "stats": {
+                        "winner": 1,
+                        "winMethod": "stocks",
+                        "endMethod": 2,
+                        "lastFrame": 10922,
+                        "gameComplete": true,
+                        "players": [
+                          {
+                            "playerIndex": 0,
+                            "characterColor": 2,
+                            "startStocks": 4,
+                            "stocksLost": 4,
+                            "kills": 2,
+                            "openings": 17,
+                            "damageDealt": 300.49,
+                            "neutralWins": 11,
+                            "inputsPerMinute": 292.6
+                          },
+                          {
+                            "playerIndex": 1,
+                            "characterColor": 0,
+                            "startStocks": 4,
+                            "stocksLost": 2,
+                            "kills": 4,
+                            "openings": 21,
+                            "damageDealt": 242.22,
+                            "neutralWins": 13,
+                            "inputsPerMinute": 231.9
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "limit": 1,
+                    "total": 11507,
+                    "pages": 11507,
+                    "totalCapped": false
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/replays/{id}": {
+      "get": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "getReplay",
+        "summary": "Get a replay",
+        "description": "One game: players, stage, date, length and where it belongs (tournament, set).",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Replay id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6abd2df68fe2062a80e9c4a5"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The game.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replay"
+                },
+                "example": {
+                  "_id": "6abd2df68fe2062a80e9c4a5",
+                  "fileHash": "da512d2cee450d44b34c649a9bcfd9cb",
+                  "fileSize": 3998829,
+                  "stageId": 31,
+                  "stageName": "Battlefield",
+                  "startAt": "2026-09-28T23:20:59.410Z",
+                  "startAtRaw": null,
+                  "duration": 10922,
+                  "players": [
+                    {
+                      "playerIndex": 0,
+                      "connectCode": "OSH#0",
+                      "displayName": "blue",
+                      "tag": null,
+                      "characterId": 20,
+                      "characterName": "Falco"
+                    },
+                    {
+                      "playerIndex": 1,
+                      "connectCode": "HUCK#242",
+                      "displayName": "HuckleberryFinn",
+                      "tag": null,
+                      "characterId": 2,
+                      "characterName": "Fox"
+                    }
+                  ],
+                  "winner": null,
+                  "matchId": "mode.direct-2026-09-28T23:19:12.32Z-0",
+                  "gameNumber": 2,
+                  "tiebreaker": 0,
+                  "mode": "direct",
+                  "tournamentKey": "kotj-8",
+                  "setId": "dir-f2308393e531e9a692e5",
+                  "setGame": 1,
+                  "duplicateOf": null,
+                  "charPair": "2-20",
+                  "source": "tournament",
+                  "usable": true,
+                  "viewCount": 12,
+                  "indexedAt": "2026-09-30T15:42:29.990Z",
+                  "tournamentName": "KOTJ #8"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/replays/{id}/stats": {
+      "get": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "getReplayStats",
+        "summary": "Get a replay's stats",
+        "description": "Everything Lunar extracted from one game: the summary (rules, result, per-player stats, positioning, tech and ledge choices) and its events (conversions, deaths, combos, edgeguards, quit-outs, tech and ledge options).",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Replay id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6abd2df68fe2062a80e9c4a5"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stats for the game.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "description": "Extracted fields: `match`, `rules`, `winner`, `winMethod`, `players` (per-player stats), `position`, `techLedge`, `extractors` (name → version) and more.",
+                      "additionalProperties": true
+                    },
+                    "events": {
+                      "type": "object",
+                      "properties": {
+                        "core": {
+                          "type": "object",
+                          "properties": {
+                            "conversions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            },
+                            "deaths": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            }
+                          }
+                        },
+                        "clipper": {
+                          "type": "object",
+                          "properties": {
+                            "combos": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            },
+                            "edgeguards": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            },
+                            "phantoms": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            },
+                            "earlyQuitOut": {
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "techLedge": {
+                          "type": "object",
+                          "properties": {
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "description": "Events per extractor; an extractor whose data couldn't be read is `null`."
+                    },
+                    "extractorErrors": {
+                      "type": "object",
+                      "properties": {},
+                      "description": "Extractor → parts that failed on this game (their events are missing, not empty).",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such game, or not processed yet (`{ \"error\": \"No stats for this replay yet\" }`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/replays/{id}/download": {
+      "get": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "downloadReplay",
+        "summary": "Download a replay",
+        "description": "The game's `.slp` file, ready for Slippi Dolphin. Most games answer `302` with the file's address on lunarmelee.com (storage-backed, cached worldwide): follow redirects. Sent gzip-compressed when you accept it.",
+        "x-rate-limit": "30/minute",
+        "x-try-it": false,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Replay id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6abd2df68fe2062a80e9c4a5"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The `.slp` file (`Content-Disposition` carries its name).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Download it from `Location` (lunarmelee.com).",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Where the file is."
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/replays/{id}/view": {
+      "post": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "recordReplayView",
+        "summary": "Record a view",
+        "x-internal": true,
+        "description": "Counts one watch in the website's replay viewer (`viewCount`). For lunarmelee.com.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Replay id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The new count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "viewCount": {
+                      "type": "integer",
+                      "description": "Views."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/replays/{id}/source": {
+      "get": {
+        "tags": [
+          "Replays"
+        ],
+        "operationId": "getReplaySource",
+        "summary": "Where a replay is stored",
+        "x-internal": true,
+        "description": "For lunarmelee.com only (service key): the byte range of a replay inside the full-database zip on storage, or `{ \"source\": null }`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Replay id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where to read it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the website."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/replays/estimate": {
+      "post": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "estimateDownload",
+        "summary": "Estimate a bulk download",
+        "description": "How many games a filter selects, how big the zip would be, and how long you would wait if you created the job now. Send exactly what you would send to create the job.",
+        "x-rate-limit": "15/minute",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayFilter"
+              },
+              "example": {
+                "p1CharacterId": "2",
+                "source": "tournament",
+                "maxFiles": 1000
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The estimate.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                },
+                "example": {
+                  "replayCount": 1000,
+                  "capped": false,
+                  "rawSize": 3495824030,
+                  "estimatedSlpzSize": 436978003,
+                  "estimatedZipSize": 437106000,
+                  "estimatedTimeSec": 370,
+                  "totalDurationFrames": 6464820,
+                  "queue": {
+                    "reusable": null,
+                    "tooLarge": false,
+                    "maxBytes": 0,
+                    "lane": "bulk",
+                    "ahead": 0,
+                    "startSec": 0,
+                    "readySec": 390,
+                    "paused": null
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/clips": {
+      "post": {
+        "tags": [
+          "Clips"
+        ],
+        "operationId": "searchClips",
+        "summary": "Search clips",
+        "description": "Combos, edgeguards and quit-outs found in every processed game, with the frames they happen on: open the game at `startFrame` to watch it. Sorted newest first, or `best` for the most damage.",
+        "x-rate-limit": "30/minute",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClipSearch"
+              },
+              "example": {
+                "type": "combo",
+                "attackerCharacterId": "2",
+                "killOnly": true,
+                "sort": "best",
+                "limit": 5
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A page of clips.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Clip"
+                      }
+                    },
+                    "total": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Matches, up to 10,000."
+                    },
+                    "capped": {
+                      "type": "boolean",
+                      "description": "There are at least `total`."
+                    },
+                    "page": {
+                      "type": "integer",
+                      "description": "Page."
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "Per page."
+                    }
+                  }
+                },
+                "example": {
+                  "results": [
+                    {
+                      "id": "6abcbc7c7e65a2c0d7ff9b3d",
+                      "replayId": "69be7ae05febbbc18f5babb5",
+                      "type": "combo",
+                      "startFrame": 3986,
+                      "endFrame": 4091,
+                      "gameFrames": 4458,
+                      "stageId": 7,
+                      "source": "netplay",
+                      "startAt": "2023-11-13T02:27:39.000Z",
+                      "attacker": {
+                        "port": 0,
+                        "characterId": 2,
+                        "connectCode": "TTVT#312",
+                        "displayName": "TTVthenickbros"
+                      },
+                      "victim": {
+                        "port": 1,
+                        "characterId": 11,
+                        "connectCode": "NSTR#907",
+                        "displayName": "PracticalNess"
+                      },
+                      "startPercent": 67,
+                      "endPercent": 307,
+                      "damage": 240,
+                      "moves": 5,
+                      "didKill": true,
+                      "score": null,
+                      "rank": 240,
+                      "infinite": false,
+                      "metrics": null
+                    }
+                  ],
+                  "total": 10000,
+                  "capped": true,
+                  "page": 1,
+                  "limit": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "post": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "createJob",
+        "summary": "Create a bulk download",
+        "description": "Starts packing the selected games into one zip. If someone already asked for exactly this, you share their job (`reused: true`) or get their finished bundle at once. Then follow it with `GET /api/jobs/{id}`.",
+        "x-rate-limit": "5/hour",
+        "x-try-it": false,
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayFilter"
+              },
+              "example": {
+                "p1CharacterId": "2",
+                "source": "tournament",
+                "maxFiles": 1000
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sharing an existing job for the same games.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string",
+                      "description": "Job id."
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "Its status."
+                    },
+                    "reused": {
+                      "type": "boolean",
+                      "description": "`true`."
+                    }
+                  }
+                },
+                "example": {
+                  "jobId": "6ac806db1ccf5f10dbda2c67",
+                  "status": "completed",
+                  "reused": true
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string",
+                      "description": "Job id."
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "`pending`."
+                    },
+                    "reused": {
+                      "type": "boolean",
+                      "description": "`false`."
+                    },
+                    "lane": {
+                      "type": "string",
+                      "description": "`fast` or `bulk`."
+                    },
+                    "missing": {
+                      "type": "integer",
+                      "description": "With `replayIds`: ids not found."
+                    }
+                  }
+                },
+                "example": {
+                  "jobId": "6ac806db1ccf5f10dbda2c67",
+                  "status": "pending",
+                  "reused": false,
+                  "lane": "bulk"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "listJobs",
+        "summary": "List your jobs",
+        "description": "Your jobs (created or shared), newest first.",
+        "x-rate-limit": "30/minute",
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "Page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": "Per page (up to 100)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your jobs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/JobSummary"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/jobs/queue": {
+      "get": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "getQueue",
+        "summary": "See the download queue",
+        "description": "What is being built, what is waiting (with forecasts) and recent bundles anyone can download now. Never says who asked for what; `mine` marks your own jobs when you send `X-Client-Id`.",
+        "x-rate-limit": "60/minute",
+        "security": [
+          {},
+          {
+            "ClientId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The queue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queue"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/jobs/bundles": {
+      "get": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "listBundles",
+        "summary": "List permanent bundles",
+        "description": "Bundles kept for good, including the whole database (`fullDb: true`), most downloaded first.",
+        "x-rate-limit": "30/minute",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "Page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": "Per page (up to 50)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Permanent bundles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bundles": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Bundle"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "example": {
+                  "bundles": [
+                    {
+                      "_id": "a11db000a11db000a11db000",
+                      "bundleSize": 1295550885100,
+                      "completedAt": "2026-09-26T17:26:19.666Z",
+                      "downloadCount": 17,
+                      "filter": {},
+                      "lastDownloadedAt": "2026-09-29T16:42:06.912Z",
+                      "replayCount": 3169618,
+                      "snapshotAt": "2026-06-17T20:06:51.000Z",
+                      "fullDb": true
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "limit": 20,
+                    "total": 1,
+                    "pages": 1
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "getJob",
+        "summary": "Check a job",
+        "description": "Status, place in line, progress and the estimated wait. Poll every 10–30 seconds until `downloadReady`.",
+        "x-rate-limit": "60/minute",
+        "x-try-it": false,
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Job id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6ac806db1ccf5f10dbda2c67"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                },
+                "example": {
+                  "jobId": "6ac806db1ccf5f10dbda2c67",
+                  "status": "bundling",
+                  "replayCount": 1000,
+                  "totalMatched": 41210,
+                  "capped": true,
+                  "estimatedSize": 3495824030,
+                  "bundleSize": null,
+                  "downloadReady": false,
+                  "pinned": false,
+                  "downloadCount": 0,
+                  "progress": {
+                    "step": "bundling",
+                    "filesProcessed": 412,
+                    "filesTotal": 1000
+                  },
+                  "error": null,
+                  "queuePosition": 0,
+                  "estimatedWaitSec": 0,
+                  "estimatedProcessingTimeSec": 210,
+                  "lane": "bulk",
+                  "sharedWith": 0,
+                  "paused": null,
+                  "createdAt": "2026-10-08T21:02:11.000Z",
+                  "startedAt": "2026-10-08T21:02:15.000Z",
+                  "completedAt": null,
+                  "lastDownloadedAt": null,
+                  "expiresAt": null
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "cancelJob",
+        "summary": "Cancel a job",
+        "description": "Stops a job that hasn't finished. If others share it, you just leave it and it carries on for them.",
+        "x-rate-limit": "10/minute",
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Job id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6ac806db1ccf5f10dbda2c67"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "description": "`Job cancelled`."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/jobs/{id}/download": {
+      "get": {
+        "tags": [
+          "Bulk downloads"
+        ],
+        "operationId": "downloadJob",
+        "summary": "Get a bundle's download link",
+        "description": "A signed link to the finished zip, valid for an hour, with resumable (range) downloads. Any finished bundle can be downloaded by anyone who has its id. Full-database links are limited to 2 per 24 hours.",
+        "x-rate-limit": "20/minute",
+        "x-try-it": false,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Job id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "6ac806db1ccf5f10dbda2c67"
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name to save the file as (`.zip` is added)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "description": "Signed download URL (1 hour).",
+                      "format": "uri"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "description": "The bundle has expired (`bundle_missing`): create the job again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/players/autocomplete": {
+      "get": {
+        "tags": [
+          "Players"
+        ],
+        "operationId": "autocompletePlayers",
+        "summary": "Autocomplete players",
+        "description": "Players whose connect code, display name or known alias starts with `q`, most active first. Made for search-as-you-type; with no `q`, the most active players. Queries of 4+ characters also match codes whose tag starts the query (`mango` finds `MANG#0`).",
+        "x-rate-limit": "30/minute",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "description": "What has been typed.",
+            "example": "mango"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Suggestions (up to 100)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlayerSuggestion"
+                  }
+                },
+                "example": [
+                  {
+                    "connectCode": "MANG#0",
+                    "displayName": "mang",
+                    "gameCount": 49911,
+                    "tag": null,
+                    "aliases": [
+                      "Mango"
+                    ]
+                  },
+                  {
+                    "connectCode": "MAN#758",
+                    "displayName": "chickenman400",
+                    "gameCount": 211,
+                    "tag": null,
+                    "aliases": []
+                  }
+                ]
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/players/search": {
+      "get": {
+        "tags": [
+          "Players"
+        ],
+        "operationId": "searchPlayers",
+        "summary": "Search players",
+        "description": "Players whose connect code, display name or alias starts with `q` (2+ characters), most active first.",
+        "x-rate-limit": "30/minute",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100
+            },
+            "description": "Start of a code or name.",
+            "required": true,
+            "example": "mang"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": "Results (up to 50)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching players.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlayerSuggestion"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/players/top": {
+      "get": {
+        "tags": [
+          "Players"
+        ],
+        "operationId": "topPlayers",
+        "summary": "Most active players",
+        "description": "Players with the most 1v1 games: record, main character and last game.",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": "Players (up to 100).",
+            "example": 10
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Players, most games first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TopPlayer"
+                  }
+                },
+                "example": [
+                  {
+                    "connectCode": "XX#02",
+                    "name": "Hax$",
+                    "games": 112157,
+                    "decided": 106124,
+                    "wins": 90601,
+                    "mainCharacterId": 2,
+                    "lastPlayed": "2025-03-06T16:51:41.000Z"
+                  }
+                ]
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/players/{code}/profile": {
+      "get": {
+        "tags": [
+          "Players"
+        ],
+        "operationId": "getPlayerProfile",
+        "summary": "Get a player profile",
+        "description": "Career stats for a connect code from its 1v1 games: record overall, per character, stage and opponent character, most played opponents, monthly activity, career totals and tech/ledge habits. URL-encode the `#` (`MANG%230`).",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "description": "Connect code, URL-encoded.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "MANG#0"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerProfile"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/tournaments": {
+      "get": {
+        "tags": [
+          "Tournaments"
+        ],
+        "operationId": "listTournaments",
+        "summary": "List tournaments",
+        "description": "Tournaments with games in the archive, most recent first (or most games). `q` matches every word of the name, ignoring punctuation (`kotj 7` finds \"KOTJ #7\").",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "description": "Words in the name.",
+            "example": "kotj"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "recent",
+                "games"
+              ],
+              "default": "recent"
+            },
+            "description": "`recent` (by last game) or `games`."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1
+            },
+            "description": "Page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": "Per page (up to 100)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of tournaments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tournaments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TournamentSummary"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "example": {
+                  "tournaments": [
+                    {
+                      "_id": "the-construct-224",
+                      "name": "The Construct 224",
+                      "startggSlug": "the-construct-224",
+                      "location": "Milwaukee, WI",
+                      "firstAt": "2026-09-27T19:22:39.110Z",
+                      "lastAt": "2026-09-27T21:15:08.500Z",
+                      "games": 47,
+                      "sets": 20,
+                      "characters": [
+                        {
+                          "characterId": 0,
+                          "games": 23
+                        },
+                        {
+                          "characterId": 20,
+                          "games": 17
+                        },
+                        {
+                          "characterId": 14,
+                          "games": 14
+                        }
+                      ]
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "limit": 1,
+                    "total": 2445,
+                    "pages": 2445
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/tournaments/{key}": {
+      "get": {
+        "tags": [
+          "Tournaments"
+        ],
+        "operationId": "getTournament",
+        "summary": "Get a tournament",
+        "description": "A tournament's summary (players, characters, stages) and all its sets with their games. `sets=0` leaves the sets out.",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "Tournament key.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "kotj-8"
+          },
+          {
+            "name": "sets",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "1"
+            },
+            "description": "`0` to leave out the sets."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tournament.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tournament": {
+                      "$ref": "#/components/schemas/Tournament"
+                    },
+                    "sets": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Set"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/sets/{id}": {
+      "get": {
+        "tags": [
+          "Tournaments"
+        ],
+        "operationId": "getSet",
+        "summary": "Get a set",
+        "description": "One set: round, the two sides and score, and its games in order.",
+        "x-rate-limit": "60/minute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Set id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "dir-221f1ffb1aa9aa0a448d"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Set"
+                },
+                "example": {
+                  "_id": "dir-221f1ffb1aa9aa0a448d",
+                  "source": "jungle",
+                  "tournament": {
+                    "key": "kotj-8",
+                    "name": "KOTJ #8",
+                    "listed": true
+                  },
+                  "event": "KOTJ #8",
+                  "round": "Losers Round 3",
+                  "bestOf": null,
+                  "location": null,
+                  "startgg": null,
+                  "players": [
+                    {
+                      "name": "b0xx bigot",
+                      "prefix": null,
+                      "port": null,
+                      "score": 3
+                    },
+                    {
+                      "name": "Smurf",
+                      "prefix": null,
+                      "port": null,
+                      "score": 1
+                    }
+                  ],
+                  "winner": 0,
+                  "games": [
+                    {
+                      "replayId": "6abd2df68fe2062a80e9c4cc",
+                      "n": 1,
+                      "winner": 0
+                    },
+                    {
+                      "replayId": "6abd2df68fe2062a80e9c4cd",
+                      "n": 2,
+                      "winner": 1
+                    }
+                  ],
+                  "startAt": null,
+                  "tournamentKey": "kotj-8"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "tags": [
+          "Archive"
+        ],
+        "operationId": "getArchiveStats",
+        "summary": "Archive totals",
+        "description": "How many games the archive holds, their combined size and length, and bulk download jobs by status. Updated every minute.",
+        "x-rate-limit": "60/minute",
+        "responses": {
+          "200": {
+            "description": "Totals.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveStats"
+                },
+                "example": {
+                  "replays": 3294295,
+                  "jobs": {
+                    "completed": 745,
+                    "cancelled": 102,
+                    "failed": 58
+                  },
+                  "dbSizeBytes": 36015749812,
+                  "totalFileSizeBytes": 11816659743618,
+                  "totalDurationFrames": 21146969918,
+                  "replaysWithDuration": 2440287
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/reference/characters": {
+      "get": {
+        "tags": [
+          "Reference"
+        ],
+        "operationId": "listCharacters",
+        "summary": "Characters",
+        "description": "Every character id with its name and costumes (Slippi's ids).",
+        "responses": {
+          "200": {
+            "description": "Characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Character"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 2,
+                    "name": "Fox",
+                    "shortName": "Fox",
+                    "colors": [
+                      "Default",
+                      "Red",
+                      "Blue",
+                      "Green"
+                    ]
+                  },
+                  {
+                    "id": 20,
+                    "name": "Falco",
+                    "shortName": "Falco",
+                    "colors": [
+                      "Default",
+                      "Red",
+                      "Blue",
+                      "Green"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/reference/stages": {
+      "get": {
+        "tags": [
+          "Reference"
+        ],
+        "operationId": "listStages",
+        "summary": "Stages",
+        "description": "Every stage id with its name (Slippi's ids). Tournament-legal: Fountain of Dreams 2, Pokémon Stadium 3, Yoshi's Story 8, Dream Land 28, Battlefield 31, Final Destination 32.",
+        "responses": {
+          "200": {
+            "description": "Stages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Stage"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 31,
+                    "name": "Battlefield",
+                    "mode": "vs"
+                  },
+                  {
+                    "id": 32,
+                    "name": "Final Destination",
+                    "mode": "vs"
+                  }
+                ]
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "health",
+        "summary": "Health",
+        "description": "Answers `{ \"ok\": true }` while the API is up.",
+        "responses": {
+          "200": {
+            "description": "Up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "Always `true`."
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "healthDetail",
+        "summary": "Health detail",
+        "description": "Up and whether the database and storage checks pass: `ok` or `degraded`.",
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "`ok` or `degraded`.",
+                      "enum": [
+                        "ok",
+                        "degraded"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string",
+                      "description": "Short summary."
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ok",
+                  "detail": "7 checks ok"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "openapi",
+        "summary": "This spec",
+        "description": "The API described as OpenAPI 3.1.",
+        "x-try-it": false,
+        "responses": {
+          "200": {
+            "description": "The spec.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "apiIndex",
+        "summary": "About this API",
+        "description": "Name, version and where the docs are.",
+        "responses": {
+          "200": {
+            "description": "Pointers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Name."
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "Spec version."
+                    },
+                    "docs": {
+                      "type": "string",
+                      "description": "Docs page."
+                    },
+                    "openapi": {
+                      "type": "string",
+                      "description": "This spec."
+                    }
+                  }
+                },
+                "example": {
+                  "name": "Lunar Melee API",
+                  "version": "1.0.0",
+                  "docs": "https://lunarmelee.com/developers",
+                  "openapi": "https://api.lunarmelee.com/openapi.json"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ClientId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Client-Id",
+        "description": "A UUID you generate once and keep: it identifies your bulk download jobs (see Identifying your client)."
+      }
+    },
+    "parameters": {},
+    "responses": {
+      "BadRequest": {
+        "description": "The request is invalid. `code` says why when the error has one.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Add at least one filter or a limit",
+              "code": "filter_required"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The job belongs to another client (`forbidden`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Not authorized for this job",
+              "code": "forbidden"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Nothing has this id.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Replay not found"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many requests. Wait for `Retry-After` seconds (or the `RateLimit-Reset` header) and try again.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Too many requests, please try again later",
+              "code": "rate_limited"
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "Something went wrong on our side. Safe to retry after a short wait.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Internal server error"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Briefly unavailable (`storage_busy`, `download_cap`). Retry after `Retry-After` seconds.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Storage is busy, please try again shortly",
+              "code": "storage_busy"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Replay": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Replay id."
+          },
+          "fileHash": {
+            "type": "string",
+            "description": "MD5 of the original `.slp` file."
+          },
+          "fileSize": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Size of the `.slp` in bytes."
+          },
+          "stageId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Stage id (see `/api/reference/stages`)."
+          },
+          "stageName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage name."
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the game started (UTC). `null` when unknown.",
+            "format": "date-time"
+          },
+          "startAtRaw": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An impossible recorded date (bad console clock), kept for reference; `startAt` is then `null`.",
+            "format": "date-time"
+          },
+          "duration": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Length in frames (60 per second)."
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReplayPlayer"
+            },
+            "description": "Every port in the game, in port order."
+          },
+          "winner": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "`playerIndex` of the winner, from the replay itself; `null` when inconclusive."
+          },
+          "matchId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slippi match id shared by every game of an online set."
+          },
+          "gameNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Game number within the online set."
+          },
+          "tiebreaker": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Tiebreaker number within the online set."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slippi online mode: `ranked`, `unranked`, `direct`, `teams`…"
+          },
+          "tournamentKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tournament this game belongs to (see `/api/tournaments/{key}`)."
+          },
+          "tournamentName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name, when the tournament has a public page."
+          },
+          "setId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The set this game belongs to (see `/api/sets/{id}`)."
+          },
+          "setGame": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Game number within the set."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`tournament`, `netplay` or `ranked`.",
+            "enum": [
+              "tournament",
+              "netplay",
+              "ranked",
+              null
+            ]
+          },
+          "viewCount": {
+            "type": "integer",
+            "description": "Times watched on lunarmelee.com."
+          },
+          "indexedAt": {
+            "type": "string",
+            "description": "When Lunar added the game.",
+            "format": "date-time"
+          },
+          "charPair": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The two characters of a 1v1 as a sorted pair (`2-20`), `multi` for 3–4 players."
+          },
+          "usable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Always `true` in responses (unusable games are hidden)."
+          },
+          "duplicateOf": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always `null` in responses (duplicates are hidden)."
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplayRowStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "One game."
+      },
+      "ReplayPlayer": {
+        "type": "object",
+        "properties": {
+          "playerIndex": {
+            "type": "integer",
+            "description": "Port, 0–3."
+          },
+          "connectCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slippi connect code, e.g. `MANG#0`. `null` offline and in ranked."
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slippi display name (in ranked: the rank tier)."
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "In-game name tag, if one was set."
+          },
+          "characterId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Character id (see `/api/reference/characters`)."
+          },
+          "characterName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Character name."
+          }
+        }
+      },
+      "ReplayRowStats": {
+        "type": "object",
+        "properties": {
+          "winner": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "`playerIndex` of the winner, or `null` (no contest, LRAS, unknown)."
+          },
+          "winMethod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the game was decided: `stocks`, `timeout`, `lras`…"
+          },
+          "endMethod": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Slippi game-end method code."
+          },
+          "lastFrame": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Last frame of the game."
+          },
+          "gameComplete": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the game was played to its end."
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "playerIndex": {
+                  "type": "integer",
+                  "description": "Port."
+                },
+                "characterColor": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Costume index."
+                },
+                "startStocks": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Stocks at the start."
+                },
+                "stocksLost": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Stocks lost."
+                },
+                "kills": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Stocks taken."
+                },
+                "openings": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Openings (punishes started)."
+                },
+                "damageDealt": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Total damage dealt, in percent."
+                },
+                "neutralWins": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Neutral interactions won."
+                },
+                "inputsPerMinute": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Inputs per minute."
+                }
+              }
+            },
+            "description": "Headline numbers per player."
+          }
+        },
+        "description": "Compact extracted stats, or `null` for a game not yet processed. The full set is at `/api/replays/{id}/stats`."
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "description": "This page (from 1)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Results per page."
+          },
+          "total": {
+            "type": "integer",
+            "description": "Matches in total (see `totalCapped`)."
+          },
+          "pages": {
+            "type": "integer",
+            "description": "Pages in total."
+          },
+          "totalCapped": {
+            "type": "boolean",
+            "description": "Replay search only: counting stopped at a cap, so there are at least `total` matches."
+          }
+        },
+        "required": [
+          "page",
+          "limit",
+          "total",
+          "pages"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in plain English."
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable reason, for the errors that have one.",
+            "enum": [
+              "filter_required",
+              "invalid_request",
+              "no_matches",
+              "invalid_client",
+              "cannot_cancel",
+              "not_ready",
+              "too_large",
+              "forbidden",
+              "not_found",
+              "bundle_missing",
+              "rate_limited",
+              "too_many_active_jobs",
+              "queue_full",
+              "fulldb_rate_limited",
+              "download_cap",
+              "storage_busy"
+            ]
+          }
+        },
+        "description": "An error. Some codes add fields (see the Errors guide).",
+        "required": [
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "ReplayFilter": {
+        "type": "object",
+        "properties": {
+          "p1ConnectCode": {
+            "type": "string",
+            "description": "Connect code(s) of one player, comma-separated.",
+            "example": "MANG#0"
+          },
+          "p1CharacterId": {
+            "type": "string",
+            "description": "Character id(s) of that player, comma-separated.",
+            "example": "2"
+          },
+          "p1DisplayName": {
+            "type": "string",
+            "description": "Display name(s) of that player (prefix match, any case), comma-separated."
+          },
+          "p1Rank": {
+            "type": "string",
+            "description": "Ranked only: rank tier(s) of that player: `platinum`, `diamond`, `master`."
+          },
+          "p2ConnectCode": {
+            "type": "string",
+            "description": "Connect code(s) of the other player."
+          },
+          "p2CharacterId": {
+            "type": "string",
+            "description": "Character id(s) of the other player.",
+            "example": "20"
+          },
+          "p2DisplayName": {
+            "type": "string",
+            "description": "Display name(s) of the other player."
+          },
+          "p2Rank": {
+            "type": "string",
+            "description": "Ranked only: rank tier(s) of the other player."
+          },
+          "stageId": {
+            "type": "string",
+            "description": "Stage id(s), comma-separated.",
+            "example": "31"
+          },
+          "source": {
+            "type": "string",
+            "description": "`tournament`, `netplay`, `ranked`, comma-separated.",
+            "example": "tournament"
+          },
+          "tournament": {
+            "type": "string",
+            "description": "Tournament key(s), comma-separated.",
+            "example": "kotj-8"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "Games on or after this date (`YYYY-MM-DD` or ISO 8601).",
+            "example": "2024-01-01"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "Games on or before this date. A date-only value includes that whole day (UTC).",
+            "example": "2024-12-31"
+          },
+          "sort": {
+            "type": "string",
+            "description": "`startAt:-1` (newest first, default) or `startAt:1` (oldest first). Decides which games a limit keeps.",
+            "enum": [
+              "startAt:-1",
+              "startAt:1"
+            ]
+          },
+          "maxFiles": {
+            "type": "integer",
+            "description": "Keep at most this many games (in `sort` order).",
+            "minimum": 1,
+            "example": 1000
+          },
+          "maxSizeMb": {
+            "type": "number",
+            "description": "Keep games until the bundle reaches this many MB (max 10,000).",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "replayIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Replay id."
+            },
+            "description": "Instead of filters: exactly these games (up to 100,000 ids). Ids that aren't found are skipped and counted in `missing`.",
+            "maxItems": 100000
+          },
+          "clipSearch": {
+            "$ref": "#/components/schemas/ClipSearch",
+            "description": "Instead of filters: the games behind a clip search (its selecting fields; `page`, `limit`, `sort` are ignored). `maxFiles` still applies."
+          }
+        },
+        "description": "Which games to bundle: the same filters as replay search (lists may also be comma-separated strings), and at least one filter or limit."
+      },
+      "Estimate": {
+        "type": "object",
+        "properties": {
+          "replayCount": {
+            "type": "integer",
+            "description": "Games in the bundle."
+          },
+          "missing": {
+            "type": "integer",
+            "description": "With `replayIds`: ids not found (skipped)."
+          },
+          "capped": {
+            "type": "boolean",
+            "description": "Counting stopped at a cap: the numbers are \"at least\"."
+          },
+          "rawSize": {
+            "type": "integer",
+            "description": "Size of the games as `.slp`, in bytes."
+          },
+          "estimatedSlpzSize": {
+            "type": "integer",
+            "description": "Size as `.slpz`."
+          },
+          "estimatedZipSize": {
+            "type": "integer",
+            "description": "Size of the download, in bytes."
+          },
+          "estimatedTimeSec": {
+            "type": "integer",
+            "description": "Seconds to build once started."
+          },
+          "totalDurationFrames": {
+            "type": "integer",
+            "description": "Combined length of the games, in frames."
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueForecast"
+          }
+        }
+      },
+      "QueueForecast": {
+        "type": "object",
+        "properties": {
+          "reusable": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "description": "A job building (or holding) this exact bundle."
+              },
+              "status": {
+                "type": "string",
+                "description": "Its status."
+              }
+            },
+            "description": "Someone already asked for exactly this: creating a job shares it."
+          },
+          "tooLarge": {
+            "type": "boolean",
+            "description": "Bigger than one bundle may be (`maxBytes`)."
+          },
+          "maxBytes": {
+            "type": "integer",
+            "description": "Largest bundle allowed, in bytes (0 = no limit)."
+          },
+          "lane": {
+            "type": "string",
+            "description": "`fast` (small bundles) or `bulk`.",
+            "enum": [
+              "fast",
+              "bulk"
+            ]
+          },
+          "ahead": {
+            "type": "integer",
+            "description": "Jobs that would start before yours."
+          },
+          "startSec": {
+            "type": "integer",
+            "description": "Seconds until yours would start."
+          },
+          "readySec": {
+            "type": "integer",
+            "description": "Seconds until yours would be ready."
+          },
+          "paused": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why downloads are paused, when they are."
+          }
+        }
+      },
+      "ClipSearch": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "What kind of moment.",
+            "enum": [
+              "combo",
+              "edgeguard",
+              "quitout"
+            ],
+            "example": "combo"
+          },
+          "attackerCharacterId": {
+            "type": "string",
+            "description": "Character id(s) of the player doing the combo/edgeguard (comma-separated or array).",
+            "example": "2"
+          },
+          "victimCharacterId": {
+            "type": "string",
+            "description": "Character id(s) of the player receiving it."
+          },
+          "attackerConnectCode": {
+            "type": "string",
+            "description": "Connect code(s) of the attacker."
+          },
+          "victimConnectCode": {
+            "type": "string",
+            "description": "Connect code(s) of the victim."
+          },
+          "stageId": {
+            "type": "string",
+            "description": "Stage id(s)."
+          },
+          "source": {
+            "type": "string",
+            "description": "`tournament`, `netplay`, `ranked`."
+          },
+          "tournament": {
+            "type": "string",
+            "description": "Tournament key(s)."
+          },
+          "startDate": {
+            "type": "string",
+            "description": "From this date (`YYYY-MM-DD`)."
+          },
+          "endDate": {
+            "type": "string",
+            "description": "Through this date (`YYYY-MM-DD`)."
+          },
+          "minDamage": {
+            "type": "number",
+            "description": "Combos only: at least this much damage (percent).",
+            "example": 60
+          },
+          "minMoves": {
+            "type": "integer",
+            "description": "At least this many hits."
+          },
+          "killOnly": {
+            "type": "boolean",
+            "description": "Combos only: only combos that took a stock.",
+            "example": true
+          },
+          "zeroToDeath": {
+            "type": "boolean",
+            "description": "Combos only: only 0-to-deaths."
+          },
+          "includeInfinites": {
+            "type": "boolean",
+            "description": "Include wobbles and one-move infinites (hidden by default)."
+          },
+          "withMoves": {
+            "type": "boolean",
+            "description": "Include each clip's full move list (`moveList`). Off by default to keep results small."
+          },
+          "sort": {
+            "type": "string",
+            "description": "`newest` (default), `oldest` or `best` (most damage).",
+            "enum": [
+              "newest",
+              "oldest",
+              "best"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page (1–400).",
+            "minimum": 1,
+            "maximum": 400
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Results per page (1–100, default 25).",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "description": "A clip search. Lists may be arrays or comma-separated strings (up to 20 values).",
+        "required": [
+          "type"
+        ]
+      },
+      "Clip": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Clip id."
+          },
+          "replayId": {
+            "type": "string",
+            "description": "The game it happened in."
+          },
+          "type": {
+            "type": "string",
+            "description": "`combo`, `edgeguard` or `quitout`."
+          },
+          "startFrame": {
+            "type": "integer",
+            "description": "First frame of the moment."
+          },
+          "endFrame": {
+            "type": "integer",
+            "description": "Last frame of the moment."
+          },
+          "gameFrames": {
+            "type": "integer",
+            "description": "Length of the whole game, in frames."
+          },
+          "stageId": {
+            "type": "integer",
+            "description": "Stage id."
+          },
+          "source": {
+            "type": "string",
+            "description": "Replay source."
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the game started.",
+            "format": "date-time"
+          },
+          "attacker": {
+            "$ref": "#/components/schemas/ClipPlayer"
+          },
+          "victim": {
+            "$ref": "#/components/schemas/ClipPlayer"
+          },
+          "startPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Victim's percent at the start."
+          },
+          "endPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Victim's percent at the end."
+          },
+          "damage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Damage done."
+          },
+          "moves": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Hits in the combo."
+          },
+          "didKill": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it took a stock."
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Edgeguard score, when scored."
+          },
+          "rank": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Sort key for `best`."
+          },
+          "infinite": {
+            "type": "boolean",
+            "description": "A wobble or one-move infinite."
+          },
+          "metrics": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {},
+            "description": "Extra measurements, by clip type.",
+            "additionalProperties": true
+          },
+          "moveList": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            },
+            "description": "With `withMoves: true`: every hit, in order."
+          }
+        }
+      },
+      "ClipPlayer": {
+        "type": "object",
+        "properties": {
+          "port": {
+            "type": "integer",
+            "description": "Port, 0–3."
+          },
+          "characterId": {
+            "type": "integer",
+            "description": "Character id."
+          },
+          "connectCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Connect code."
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name."
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "description": "Job id."
+          },
+          "status": {
+            "type": "string",
+            "description": "Where the job is.",
+            "enum": [
+              "pending",
+              "processing",
+              "bundling",
+              "bundled",
+              "uploading",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "replayCount": {
+            "type": "integer",
+            "description": "Games in the bundle."
+          },
+          "totalMatched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Games the filter matched before the limit."
+          },
+          "capped": {
+            "type": "boolean",
+            "description": "A limit trimmed the bundle (`replayCount` < `totalMatched`)."
+          },
+          "estimatedSize": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Estimated `.slp` bytes."
+          },
+          "bundleSize": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Size of the finished zip, in bytes."
+          },
+          "downloadReady": {
+            "type": "boolean",
+            "description": "The zip can be downloaded now."
+          },
+          "pinned": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Kept permanently."
+          },
+          "downloadCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Times downloaded."
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed."
+          },
+          "queuePosition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Place in line (1 = next); 0 once running."
+          },
+          "estimatedWaitSec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds until it starts."
+          },
+          "estimatedProcessingTimeSec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds until it is ready once started (while running: until ready)."
+          },
+          "lane": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`fast` or `bulk`."
+          },
+          "sharedWith": {
+            "type": "integer",
+            "description": "Other people waiting on this same bundle."
+          },
+          "paused": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why downloads are paused, when they are."
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Created.",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Started.",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Finished.",
+            "format": "date-time"
+          },
+          "lastDownloadedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last downloaded.",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the bundle will be removed (3 days after its last download); `null` if pinned or not finished.",
+            "format": "date-time"
+          }
+        }
+      },
+      "JobSummary": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Job id."
+          },
+          "status": {
+            "type": "string",
+            "description": "Status.",
+            "enum": [
+              "pending",
+              "processing",
+              "bundling",
+              "bundled",
+              "uploading",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "filter": {
+            "type": "object",
+            "properties": {},
+            "description": "The job's filter as sent (an id list shows as `replayIdCount`; a clip search as its object).",
+            "additionalProperties": true
+          },
+          "replayCount": {
+            "type": "integer",
+            "description": "Games."
+          },
+          "bundleSize": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Zip size in bytes."
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed."
+          },
+          "downloadReady": {
+            "type": "boolean",
+            "description": "Downloadable now."
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Created.",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Finished.",
+            "format": "date-time"
+          },
+          "lastDownloadedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last downloaded.",
+            "format": "date-time"
+          }
+        }
+      },
+      "JobProgress": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "`queued`, `compressing`, `bundling`, `uploading`…"
+          },
+          "filesProcessed": {
+            "type": "integer",
+            "description": "Games packed so far."
+          },
+          "filesTotal": {
+            "type": "integer",
+            "description": "Games to pack."
+          },
+          "bytesUploaded": {
+            "type": "integer",
+            "description": "Bytes uploaded so far."
+          },
+          "bytesTotal": {
+            "type": "integer",
+            "description": "Bytes to upload."
+          }
+        },
+        "description": "Progress while the job runs.",
+        "additionalProperties": true
+      },
+      "Queue": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why downloads are paused, when they are."
+          },
+          "throughputBps": {
+            "type": "integer",
+            "description": "Recent build speed, bytes per second."
+          },
+          "workSec": {
+            "type": "integer",
+            "description": "Seconds until everything queued now is ready."
+          },
+          "running": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Job id."
+                },
+                "filter": {
+                  "type": "object",
+                  "properties": {},
+                  "description": "The job's filter as sent (an id list shows as `replayIdCount`; a clip search as its object).",
+                  "additionalProperties": true
+                },
+                "replayCount": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "bytes": {
+                  "type": "integer",
+                  "description": "Bundle bytes (estimated until built)."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "Status."
+                },
+                "lane": {
+                  "type": "string",
+                  "description": "Lane."
+                },
+                "progressPct": {
+                  "type": "integer",
+                  "description": "Percent done."
+                },
+                "readySec": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds until ready."
+                },
+                "shared": {
+                  "type": "integer",
+                  "description": "People waiting on it."
+                },
+                "mine": {
+                  "type": "boolean",
+                  "description": "Yours (with your `X-Client-Id`)."
+                }
+              }
+            },
+            "description": "Being built now."
+          },
+          "waiting": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Job id."
+                },
+                "filter": {
+                  "type": "object",
+                  "properties": {},
+                  "description": "The job's filter as sent (an id list shows as `replayIdCount`; a clip search as its object).",
+                  "additionalProperties": true
+                },
+                "replayCount": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "bytes": {
+                  "type": "integer",
+                  "description": "Estimated bytes."
+                },
+                "lane": {
+                  "type": "string",
+                  "description": "Lane."
+                },
+                "position": {
+                  "type": "integer",
+                  "description": "Place in line."
+                },
+                "startSec": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds until it starts."
+                },
+                "readySec": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds until ready."
+                },
+                "shared": {
+                  "type": "integer",
+                  "description": "People waiting on it."
+                },
+                "mine": {
+                  "type": "boolean",
+                  "description": "Yours."
+                }
+              }
+            },
+            "description": "Waiting, in order (first 300)."
+          },
+          "waitingTotal": {
+            "type": "integer",
+            "description": "Jobs waiting in total."
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Job id."
+                },
+                "filter": {
+                  "type": "object",
+                  "properties": {},
+                  "description": "The job's filter as sent (an id list shows as `replayIdCount`; a clip search as its object).",
+                  "additionalProperties": true
+                },
+                "replayCount": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "bundleSize": {
+                  "type": "integer",
+                  "description": "Zip bytes."
+                },
+                "completedAt": {
+                  "type": "string",
+                  "description": "Built.",
+                  "format": "date-time"
+                },
+                "downloadCount": {
+                  "type": "integer",
+                  "description": "Downloads."
+                },
+                "pinned": {
+                  "type": "boolean",
+                  "description": "Kept permanently."
+                },
+                "mine": {
+                  "type": "boolean",
+                  "description": "Yours."
+                },
+                "expiresAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Removed at.",
+                  "format": "date-time"
+                }
+              }
+            },
+            "description": "Finished bundles anyone can download right now."
+          }
+        }
+      },
+      "Bundle": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Job id: download it with `/api/jobs/{id}/download`."
+          },
+          "filter": {
+            "type": "object",
+            "properties": {},
+            "description": "The job's filter as sent (an id list shows as `replayIdCount`; a clip search as its object).",
+            "additionalProperties": true
+          },
+          "replayCount": {
+            "type": "integer",
+            "description": "Games."
+          },
+          "bundleSize": {
+            "type": "integer",
+            "description": "Zip size in bytes."
+          },
+          "downloadCount": {
+            "type": "integer",
+            "description": "Times downloaded."
+          },
+          "completedAt": {
+            "type": "string",
+            "description": "Built.",
+            "format": "date-time"
+          },
+          "lastDownloadedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last downloaded.",
+            "format": "date-time"
+          },
+          "fullDb": {
+            "type": "boolean",
+            "description": "The whole-database zip."
+          },
+          "snapshotAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full database: when the snapshot was taken.",
+            "format": "date-time"
+          }
+        }
+      },
+      "PlayerSuggestion": {
+        "type": "object",
+        "properties": {
+          "connectCode": {
+            "type": "string",
+            "description": "Connect code."
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Most used display name."
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "In-game tag."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": ""
+            },
+            "description": "Other names this player is known by in the archive."
+          },
+          "gameCount": {
+            "type": "integer",
+            "description": "Games in the archive."
+          }
+        }
+      },
+      "TopPlayer": {
+        "type": "object",
+        "properties": {
+          "connectCode": {
+            "type": "string",
+            "description": "Connect code."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Most used display name."
+          },
+          "games": {
+            "type": "integer",
+            "description": "1v1 games."
+          },
+          "decided": {
+            "type": "integer",
+            "description": "Games with a winner."
+          },
+          "wins": {
+            "type": "integer",
+            "description": "Games won."
+          },
+          "mainCharacterId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Most played character."
+          },
+          "lastPlayed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last game.",
+            "format": "date-time"
+          }
+        }
+      },
+      "PlayerProfile": {
+        "type": "object",
+        "properties": {
+          "connectCode": {
+            "type": "string",
+            "description": "Connect code."
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Name."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games under it."
+                }
+              }
+            },
+            "description": "The primary display name."
+          },
+          "games": {
+            "type": "integer",
+            "description": "Games."
+          },
+          "decided": {
+            "type": "integer",
+            "description": "Games with a winner."
+          },
+          "wins": {
+            "type": "integer",
+            "description": "Wins."
+          },
+          "firstPlayed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First game.",
+            "format": "date-time"
+          },
+          "lastPlayed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last game.",
+            "format": "date-time"
+          },
+          "sources": {
+            "type": "object",
+            "properties": {},
+            "description": "Games per source.",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "characters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "characterId": {
+                  "type": "integer",
+                  "description": "Character."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "decided": {
+                  "type": "integer",
+                  "description": "Games with a winner."
+                },
+                "wins": {
+                  "type": "integer",
+                  "description": "Wins."
+                }
+              }
+            },
+            "description": "Record per character played, most played first."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "stageId": {
+                  "type": "integer",
+                  "description": "Stage."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "decided": {
+                  "type": "integer",
+                  "description": "Games with a winner."
+                },
+                "wins": {
+                  "type": "integer",
+                  "description": "Wins."
+                }
+              }
+            },
+            "description": "Record per stage."
+          },
+          "vsCharacters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "characterId": {
+                  "type": "integer",
+                  "description": "Opponent character."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "decided": {
+                  "type": "integer",
+                  "description": "Games with a winner."
+                },
+                "wins": {
+                  "type": "integer",
+                  "description": "Wins."
+                }
+              }
+            },
+            "description": "Record against each character."
+          },
+          "opponents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "connectCode": {
+                  "type": "string",
+                  "description": "Opponent."
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Their primary name."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "decided": {
+                  "type": "integer",
+                  "description": "Games with a winner."
+                },
+                "wins": {
+                  "type": "integer",
+                  "description": "Wins."
+                }
+              }
+            },
+            "description": "Most played opponents."
+          },
+          "monthly": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string",
+                  "description": "`YYYY-MM`."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                },
+                "decided": {
+                  "type": "integer",
+                  "description": "Games with a winner."
+                },
+                "wins": {
+                  "type": "integer",
+                  "description": "Wins."
+                }
+              }
+            },
+            "description": "Activity per month."
+          },
+          "totals": {
+            "type": "object",
+            "properties": {},
+            "description": "Career totals: kills, stocksLost, openings, damageDealt, neutralWins, counterHits, l-cancels, wavedashes, dash dances, ledge grabs, positioning frames…",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "techLedge": {
+            "type": "object",
+            "properties": {},
+            "description": "How often each tech and ledge option was chosen (`tech.in_place`, `ledge.drop`…).",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "builtAt": {
+            "type": "string",
+            "description": "When the profile was last rebuilt.",
+            "format": "date-time"
+          }
+        },
+        "description": "Career stats from 1v1 games."
+      },
+      "TournamentSummary": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Tournament key."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "startggSlug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "start.gg slug, when linked."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it was held."
+          },
+          "firstAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First game.",
+            "format": "date-time"
+          },
+          "lastAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last game.",
+            "format": "date-time"
+          },
+          "games": {
+            "type": "integer",
+            "description": "Games."
+          },
+          "sets": {
+            "type": "integer",
+            "description": "Sets."
+          },
+          "characters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "characterId": {
+                  "type": "integer",
+                  "description": "Character."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                }
+              }
+            },
+            "description": "Most played characters (top 3 in lists)."
+          }
+        }
+      },
+      "Tournament": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Tournament key."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "startggSlug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "start.gg slug, when linked."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it was held."
+          },
+          "firstAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First game.",
+            "format": "date-time"
+          },
+          "lastAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last game.",
+            "format": "date-time"
+          },
+          "games": {
+            "type": "integer",
+            "description": "Games."
+          },
+          "sets": {
+            "type": "integer",
+            "description": "Sets."
+          },
+          "characters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "characterId": {
+                  "type": "integer",
+                  "description": "Character."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                }
+              }
+            },
+            "description": "Most played characters (top 3 in lists)."
+          },
+          "listed": {
+            "type": "boolean",
+            "description": "Has a public page."
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Player."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                }
+              }
+            },
+            "description": "Players, most games first."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "stageId": {
+                  "type": "integer",
+                  "description": "Stage."
+                },
+                "games": {
+                  "type": "integer",
+                  "description": "Games."
+                }
+              }
+            },
+            "description": "Stages played."
+          }
+        }
+      },
+      "Set": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Set id: `sgg-…` (start.gg) or `dir-…`."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the set came from."
+          },
+          "tournamentKey": {
+            "type": "string",
+            "description": "Tournament key."
+          },
+          "tournament": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Key."
+              },
+              "name": {
+                "type": "string",
+                "description": "Name."
+              },
+              "listed": {
+                "type": "boolean",
+                "description": "Has a public page."
+              }
+            }
+          },
+          "event": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Event name."
+          },
+          "round": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bracket round, e.g. \"Losers Round 3\"."
+          },
+          "bestOf": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Best of."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it was played."
+          },
+          "startgg": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {},
+            "description": "start.gg ids (set, event, entrants, placements), when linked.",
+            "additionalProperties": true
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Player."
+                },
+                "prefix": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Sponsor prefix."
+                },
+                "port": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Port."
+                },
+                "score": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Games won."
+                }
+              }
+            },
+            "description": "The two sides."
+          },
+          "winner": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Index into `players` of the winner."
+          },
+          "games": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "replayId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Replay id (`null` if missing)."
+                },
+                "n": {
+                  "type": "integer",
+                  "description": "Game number."
+                },
+                "winner": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Index into `players`."
+                }
+              }
+            },
+            "description": "Games in order."
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the set started.",
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchiveStats": {
+        "type": "object",
+        "properties": {
+          "replays": {
+            "type": "integer",
+            "description": "Searchable games."
+          },
+          "jobs": {
+            "type": "object",
+            "properties": {},
+            "description": "Bulk download jobs by status.",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "dbSizeBytes": {
+            "type": "integer",
+            "description": "Size of the index."
+          },
+          "totalFileSizeBytes": {
+            "type": "integer",
+            "description": "Size of every replay as `.slp`."
+          },
+          "totalDurationFrames": {
+            "type": "integer",
+            "description": "Combined length of every game, in frames."
+          },
+          "replaysWithDuration": {
+            "type": "integer",
+            "description": "Games with a known length."
+          }
+        }
+      },
+      "Character": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Character id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "shortName": {
+            "type": "string",
+            "description": "Short name."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": ""
+            },
+            "description": "Costumes, by `characterColor` index."
+          }
+        }
+      },
+      "Stage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Stage id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Game mode it belongs to."
+          }
+        }
+      }
+    }
+  },
+  "x-error-codes": [
+    {
+      "code": "filter_required",
+      "status": 400,
+      "meaning": "An estimate or job without any filter or limit."
+    },
+    {
+      "code": "invalid_request",
+      "status": 400,
+      "meaning": "Invalid search parameters (e.g. a clip search without a valid `type`)."
+    },
+    {
+      "code": "no_matches",
+      "status": 400,
+      "meaning": "The filter matches no replays."
+    },
+    {
+      "code": "invalid_client",
+      "status": 400,
+      "meaning": "A missing or malformed `X-Client-Id` (it must be a UUID)."
+    },
+    {
+      "code": "cannot_cancel",
+      "status": 400,
+      "meaning": "The job is past the point of cancelling. Extra: `status`."
+    },
+    {
+      "code": "not_ready",
+      "status": 400,
+      "meaning": "The bundle is not built yet."
+    },
+    {
+      "code": "too_large",
+      "status": 400,
+      "meaning": "The bundle would be bigger than one download may be. Extra: `estimatedBytes`, `maxBytes`."
+    },
+    {
+      "code": "forbidden",
+      "status": 403,
+      "meaning": "The job belongs to another client."
+    },
+    {
+      "code": "not_found",
+      "status": 404,
+      "meaning": "No job has this id."
+    },
+    {
+      "code": "bundle_missing",
+      "status": 410,
+      "meaning": "The job finished, but its bundle has expired from storage."
+    },
+    {
+      "code": "rate_limited",
+      "status": 429,
+      "meaning": "Too many requests. See `Retry-After`."
+    },
+    {
+      "code": "too_many_active_jobs",
+      "status": 429,
+      "meaning": "You already have the maximum number of jobs running. Extra: `limit`."
+    },
+    {
+      "code": "queue_full",
+      "status": 429,
+      "meaning": "The download queue is full. Extra: `pending`, `workSec`."
+    },
+    {
+      "code": "fulldb_rate_limited",
+      "status": 429,
+      "meaning": "The full-database download limit for your window is used up. Extra: `retryAfterSeconds`."
+    },
+    {
+      "code": "download_cap",
+      "status": 503,
+      "meaning": "Storage's daily download allowance is used up. Try again tomorrow."
+    },
+    {
+      "code": "storage_busy",
+      "status": 503,
+      "meaning": "Storage or replay serving is busy. Retry after `Retry-After` seconds."
+    }
+  ]
+}

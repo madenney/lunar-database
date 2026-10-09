@@ -65,3 +65,19 @@ describe("GET /api/replays/:id/source", () => {
     expect((await get("not-an-id", KEY)).status).toBe(404);
   });
 });
+
+describe("GET /api/replays/:id/download for direct API callers", () => {
+  it("sends a replay in the current zip to the website's storage-backed copy", async () => {
+    const r = await Replay.create({
+      filePath: "tournament/G9/Game_4.slp", fileHash: "s4", players: [],
+      archive: { snapshot: "archive/lunar_db_full.zip@etag-now", offset: 1, length: 2, format: "slpz" },
+    });
+    const direct = await fetch(`${base}/api/replays/${r._id}/download`, { redirect: "manual" });
+    expect(direct.status).toBe(302);
+    expect(direct.headers.get("location")).toBe(`${config.publicSiteUrl}/api/download?action=replay&replayId=${r._id}`);
+    // The website itself (falling back here) is never sent back to itself.
+    const website = await fetch(`${base}/api/replays/${r._id}/download`, { redirect: "manual", headers: { "X-Lunar-Service-Key": KEY } });
+    expect(website.status).not.toBe(302);
+    expect((await fetch(`${base}/api/replays/not-an-id/download`, { redirect: "manual" })).status).toBe(404);
+  });
+});

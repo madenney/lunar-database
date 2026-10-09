@@ -32,7 +32,7 @@ const router = Router();
  * folder label, whose collection folders can carry a person's real name. Both stay
  * in the database for bundling and backfills.
  */
-const PUBLIC_REPLAY_EXCLUDE = "-filePath -folderLabel -archive";
+const PUBLIC_REPLAY_EXCLUDE = "-filePath -folderLabel -archive -__v";
 
 /** Per-player fields of the compact stats attached to search results. */
 const ROW_PLAYER_FIELDS = [
@@ -387,9 +387,21 @@ const replayStreams = new StreamGate(config.replayStreamsMax);
 // GET /api/replays/:id/download — serve the .slp file directly
 router.get("/:id/download", downloadLimiter, async (req: Request, res: Response) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      res.status(404).json({ error: "Replay not found" });
+      return;
+    }
     const replay = await Replay.findById(req.params.id).lean();
     if (!replay) {
       res.status(404).json({ error: "Replay not found" });
+      return;
+    }
+    // A direct API caller's replay in the full-DB snapshot: send them to the
+    // website's copy, which reads it from storage and is cached at the edge,
+    // instead of this server's uplink. (The website itself, falling back here,
+    // is served below.)
+    if (!isServiceCaller(req) && replay.archive?.snapshot && replay.archive.snapshot === (await currentSnapshotId())) {
+      res.redirect(302, `${config.publicSiteUrl}/api/download?action=replay&replayId=${replay._id}`);
       return;
     }
     const rootDir = fs.realpathSync(config.slpRootDir);
