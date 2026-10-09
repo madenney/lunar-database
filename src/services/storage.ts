@@ -9,7 +9,7 @@ import { paced } from "./uplink";
 
 let client: S3Client | null = null;
 
-function getClient(): S3Client {
+export function getClient(): S3Client {
   if (!client) {
     if (!config.s3Configured) {
       throw new Error("S3 credentials not configured (S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)");
@@ -175,6 +175,16 @@ export async function getPresignedDownloadUrl(
       : {}),
   });
   return getSignedUrl(getClient(), command, { expiresIn: bounded });
+}
+
+/**
+ * A presigned GET for reading byte ranges of an object (the caller sends a Range
+ * header; it isn't part of the signature). Used for single replays inside the full-DB
+ * zip (services/fullDbArchive.ts).
+ */
+export async function getPresignedRangeUrl(key: string, expiresInSeconds = 600): Promise<string> {
+  const bounded = Math.min(Math.max(60, expiresInSeconds), 3600);
+  return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: config.s3BucketName, Key: key }), { expiresIn: bounded });
 }
 
 /**

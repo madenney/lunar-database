@@ -1,5 +1,13 @@
 import mongoose, { Schema, Document } from "mongoose";
 
+/** A replay's bytes inside the full-DB zip: [offset, offset + length) of `snapshot`. */
+export interface ReplayArchiveLocation {
+  snapshot: string;
+  offset: number;
+  length: number;
+  format: "slpz" | "slp";
+}
+
 export interface IReplayPlayer {
   playerIndex: number;
   connectCode: string | null;
@@ -103,6 +111,12 @@ export interface IReplay extends Document {
   duplicateOf: mongoose.Types.ObjectId | null;
   /** See charPairOf. */
   charPair: string | null;
+  /**
+   * Where this replay's bytes sit inside the full-DB zip on storage (services/fullDbArchive.ts):
+   * the website serves replay views from there instead of the home uplink. Set by
+   * scripts/indexFullDb.ts; `snapshot` names the zip version the offsets belong to.
+   */
+  archive?: ReplayArchiveLocation | null;
   folderLabel: string | null; // loose label derived from folder path
   source: ReplaySource | null; // netplay | ranked | tournament (from folderLabel)
   usable: boolean | null; // materialised NOT_JUNK_QUERY — null = not yet backfilled
@@ -141,6 +155,10 @@ const ReplaySchema = new Schema<IReplay>({
   setId: { type: String, default: null },
   setGame: { type: Number, default: null },
   duplicateOf: { type: Schema.Types.ObjectId, default: null },
+  archive: {
+    type: new Schema({ snapshot: String, offset: Number, length: Number, format: String }, { _id: false }),
+    default: undefined,
+  },
   charPair: { type: String, default: null },
   folderLabel: { type: String, default: null },
   source: { type: String, enum: [...REPLAY_SOURCES, null], default: null },

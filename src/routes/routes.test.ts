@@ -6,6 +6,7 @@ import { Job } from "../models/Job";
 import { DownloadEvent } from "../models/DownloadEvent";
 import { config } from "../config";
 import { resolveSelection } from "../services/replaySearchQuery";
+import { FORECAST_MARGIN } from "../services/jobQueue";
 import replayRoutes from "./replays";
 import jobRoutes from "./jobs";
 import statsRoutes, { clearStatsCache } from "./stats";
@@ -937,6 +938,10 @@ describe("DELETE /api/jobs/:id — codes and races", () => {
   });
 });
 
+// Forecasts plan with FORECAST_MARGIN of the measured speed (services/jobQueue.ts), so a
+// wait that takes 60 s at full speed is promised as 60 / 0.8 = 75 s.
+const planned = (sec: number) => Math.round(sec / FORECAST_MARGIN);
+
 describe("GET /api/jobs/:id", () => {
   it("returns job status with downloadReady flag", async () => {
     const job = await Job.create({ filter: { p1ConnectCode: "X#1" }, createdBy: TEST_CLIENT_ID });
@@ -977,12 +982,12 @@ describe("GET /api/jobs/:id", () => {
     const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body1.queuePosition).toBe(1);
     expect(body1.estimatedWaitSec).toBe(0); // nothing ahead
-    expect(body1.estimatedProcessingTimeSec).toBe(60);
+    expect(body1.estimatedProcessingTimeSec).toBe(planned(60));
 
     const { body: body2 } = await get(`/api/jobs/${job2._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body2.queuePosition).toBe(2);
-    expect(body2.estimatedWaitSec).toBe(60); // job1 ahead
-    expect(body2.estimatedProcessingTimeSec).toBe(30);
+    expect(body2.estimatedWaitSec).toBe(planned(60)); // job1 ahead
+    expect(body2.estimatedProcessingTimeSec).toBe(planned(30));
   });
 
   it("returns queuePosition 0 for active job", async () => {
@@ -999,7 +1004,7 @@ describe("GET /api/jobs/:id", () => {
     const { body } = await get(`/api/jobs/${job._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body.queuePosition).toBe(0);
     expect(body.estimatedWaitSec).toBe(0);
-    expect(body.estimatedProcessingTimeSec).toBe(75);
+    expect(body.estimatedProcessingTimeSec).toBe(planned(75));
   });
 
   it("returns queuePosition 0 for bundled job", async () => {
@@ -1036,7 +1041,7 @@ describe("GET /api/jobs/:id", () => {
 
     const { body: body1 } = await get(`/api/jobs/${job1._id}`, { "X-Client-Id": TEST_CLIENT_ID });
     expect(body1.queuePosition).toBe(2);
-    expect(body1.estimatedWaitSec).toBe(30); // job2 is ahead
+    expect(body1.estimatedWaitSec).toBe(planned(30)); // job2 is ahead
   });
 
   it("returns 404 for unknown job", async () => {

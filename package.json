@@ -33,7 +33,8 @@
     "build-players": "ts-node src/scripts/buildPlayers.ts",
     "backfill-charpair": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/backfillCharPair.ts",
     "mark-duplicates": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/markDuplicates.ts",
-    "extract-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/extractStats.ts"
+    "extract-stats": "TS_NODE_TRANSPILE_ONLY=true ts-node src/scripts/extractStats.ts",
+    "index-full-db": "TS_NODE_TRANSPILE_ONLY=true node --max-old-space-size=4096 -r ts-node/register src/scripts/indexFullDb.ts"
   },
   "repository": {
     "type": "git",

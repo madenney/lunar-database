@@ -18,6 +18,9 @@ import { SearchEvent } from "../models/SearchEvent";
 import { sendError } from "../utils/sendError";
 import { createRateLimiter } from "../utils/rateLimiter";
 import { StreamGate } from "../services/replayStreams";
+import { archiveUrl, currentSnapshotId } from "../services/fullDbArchive";
+import { isServiceCaller } from "../middleware/serviceCaller";
+import mongoose from "mongoose";
 import { uplink } from "../services/uplink";
 import { queryCountAndSize, calculateEstimates } from "../services/estimator";
 import { sanitizeFilters } from "../utils/sanitizeFilters";
@@ -29,7 +32,7 @@ const router = Router();
  * folder label, whose collection folders can carry a person's real name. Both stay
  * in the database for bundling and backfills.
  */
-const PUBLIC_REPLAY_EXCLUDE = "-filePath -folderLabel";
+const PUBLIC_REPLAY_EXCLUDE = "-filePath -folderLabel -archive";
 
 /** Per-player fields of the compact stats attached to search results. */
 const ROW_PLAYER_FIELDS = [
@@ -321,6 +324,58 @@ const downloadLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 10,
   message: { error: "Too many download requests, please try again later" },
+});
+
+const sourceLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: "Too many replay requests, please try again later" },
+});
+
+// GET /api/replays/:id/source — where to read this replay from storage instead of here.
+// For the website only (service key). The replay's bytes are a range of the full-DB zip
+// (services/fullDbArchive.ts); answers { source: null } when the replay isn't in the
+// current zip, and the website falls back to /download.
+router.get("/:id/source", sourceLimiter, async (req: Request, res: Response) => {
+  try {
+    if (!isServiceCaller(req)) {
+      res.status(403).json({ error: "Not available" });
+      return;
+    }
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      res.status(404).json({ error: "Replay not found" });
+      return;
+    }
+    const replay = await Replay.findById(req.params.id).select("archive filePath fileSize").lean();
+    if (!replay) {
+      res.status(404).json({ error: "Replay not found" });
+      return;
+    }
+    const a = replay.archive;
+    const current = a ? await currentSnapshotId() : null;
+    if (!a || !current || a.snapshot !== current || !(a.length > 0)) {
+      res.json({ source: null });
+      return;
+    }
+    DownloadEvent.create({
+      type: "replay",
+      replayId: replay._id,
+      clientId: (req.headers["x-client-id"] as string) || null,
+      bundleSize: replay.fileSize || null,
+      replayCount: 1,
+    }).catch(() => {});
+    res.json({
+      source: {
+        url: await archiveUrl(600),
+        offset: a.offset,
+        length: a.length,
+        format: a.format,
+        filename: path.basename(replay.filePath),
+      },
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
 });
 
 const replayStreams = new StreamGate(config.replayStreamsMax);
