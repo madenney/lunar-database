@@ -44,6 +44,23 @@ curl -L --compressed -OJ "https://api.lunarmelee.com/api/replays/6abd2df68fe2062
 
 **4. Need thousands of games?** Don't loop over single downloads: ask for a [bulk download](#bulk-downloads) and get them all in one zip.
 
+## Using an AI assistant
+
+The whole reference is also one plain Markdown file, so Claude, ChatGPT or any coding assistant can read all of it in one go:
+
+- **[lunarmelee.com/llms-full.txt](https://lunarmelee.com/llms-full.txt)**: every guide, endpoint, parameter, example and schema (also at [/developers.md](https://lunarmelee.com/developers.md)).
+- **[lunarmelee.com/llms.txt](https://lunarmelee.com/llms.txt)**: a short index, following the [llms.txt](https://llmstxt.org) convention.
+- **[api.lunarmelee.com/openapi.json](https://api.lunarmelee.com/openapi.json)**: the OpenAPI spec, for tools that generate clients.
+
+Paste this to your assistant and add what you want to build:
+
+```text
+Read https://lunarmelee.com/llms-full.txt. It is the complete reference for the
+Lunar Melee API: free, no API key, Super Smash Bros. Melee Slippi replays, stats,
+players and tournaments. Use only endpoints and fields it documents, and follow its
+rate limits and fair-use guide. Then help me with this:
+```
+
 ## Identifying your client
 
 Reading needs no identification. Bulk download jobs do, so the API knows which jobs are yours: send an `X-Client-Id` header with a UUID (version 4 is fine) that you generate once and keep.
