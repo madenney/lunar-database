@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the whole-database download: build → verify → upload → register.
+# Rebuild the whole-database download: build → verify → upload → register → index replay locations.
 # Runs on the worker, where the archive is local disk. Run it detached:
 #
 #   nohup scripts/full-db/rebuild.sh > /dev/null 2>&1 &
@@ -27,6 +27,9 @@ fi
 : "${SLPZ_ARCHIVE_DIR:?SLPZ_ARCHIVE_DIR not set}"
 WORK="${FULL_DB_WORK:-$HOME/Projects/worker/shared_folder_2/full_db}"
 RCLONE="${RCLONE:-$HOME/Projects/worker/shared_folder/_bulk/rclone}"
+# !! Still the retired B2 bucket: storage moved to Cloudflare R2 (2026-09-29). Before a
+# rebuild, add an R2 remote to rclone and point this at the bucket the database's S3_*
+# settings use (archive/ prefix), or replay views and the full-DB download read the old zip.
 RCLONE_DEST="${RCLONE_DEST:-b2s3:lm-replays/archive/}"
 ZIP="$WORK/lunar_db_full.zip"
 LOG="$WORK/rebuild.log"
@@ -72,4 +75,15 @@ log "upload done ($REMOTE bytes)"
 
 npm run --silent register-full-db -- --size "$BYTES" --replays "$REPLAYS" --snapshot "$SNAPSHOT" >> "$LOG" 2>&1
 touch "$ZIP.registered"
-log "registered: $REPLAYS replays, $BYTES bytes, snapshot $SNAPSHOT — COMPLETE"
+log "registered: $REPLAYS replays, $BYTES bytes, snapshot $SNAPSHOT"
+
+# Replay views are served from inside this zip (services/fullDbArchive.ts). The new zip has
+# a new ETag, so until this runs every replay falls back to the database server (slower,
+# home uplink, but nothing breaks). Re-index so they come from storage again.
+log "indexing replay locations in the new zip"
+if npm run --silent index-full-db -- --apply >> "$LOG" 2>&1; then
+  log "indexed — COMPLETE"
+else
+  log "index FAILED (replays still work from the database server): run 'npm run index-full-db -- --apply' by hand"
+  exit 1
+fi

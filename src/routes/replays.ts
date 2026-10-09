@@ -320,15 +320,19 @@ router.post("/:id/view", viewLimiter, async (req: Request, res: Response) => {
   }
 });
 
+// The home-uplink path: only replays newer than the full-DB snapshot come here now
+// (paced by the shared uplink budget anyway).
 const downloadLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 30,
   message: { error: "Too many download requests, please try again later" },
 });
 
+// Replay views and Clipper's game-by-game downloads (up to 200 games each) come
+// through here; the bytes are served from storage, so this only guards the lookup.
 const sourceLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 60,
+  max: 300,
   message: { error: "Too many replay requests, please try again later" },
 });
 
